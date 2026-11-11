@@ -22,6 +22,10 @@ results are converted once to Neuroglancer "precomputed" data (cached in
     colours, tags (search e.g. "#Isocortex") and per-region statistics
   - extra label volumes (e.g. spinal cord segments)
   - region meshes   : 3D surfaces of every region at every hierarchy level
+  - a side panel    : search a region by name ("locus coeruleus") to highlight it and
+                      jump to it, and choose a LUT (Grays, Fire, Viridis, ...) per channel
+  - with --zoom     : raw multires ROI channels at native resolution, placed with
+                      the saved ROI-to-overview transforms (no re-registration)
 
 Region names / hierarchy come from, in order of preference:
   1. Fiederling spinal cord atlas Atlas_Regions.csv (parent tree)
@@ -33,16 +37,20 @@ Region names / hierarchy come from, in order of preference:
 """
 
 import argparse
+import difflib
 import functools
 import hashlib
 import http.server
 import json
 import os
 import re
+import secrets
 import shutil
 import struct
 import sys
 import threading
+import unicodedata
+import urllib.parse
 import webbrowser
 from pathlib import Path
 
@@ -54,7 +62,8 @@ import yaml
 from scipy import ndimage
 from skimage.measure import marching_cubes
 
-TOOL_VERSION = 3
+__version__ = "0.2.0"
+TOOL_VERSION = 4
 MANIFEST = Path("volume_registered") / "sample_space" / "sample_space_manifest.json"
 CHUNK = 64
 SYNTHETIC_ID_BASE = 3_000_000_000
@@ -391,7 +400,13 @@ def brainglobe_records(structures_json: Path) -> list[dict]:
 def brainglobe_dirs(sample: Sample) -> list[Path]:
     """Downloaded BrainGlobe atlases, best name match first."""
     roots = [Path(os.environ["BRAINGLOBE_DIR"])] if os.environ.get("BRAINGLOBE_DIR") else []
-    roots += [Path.home() / ".brainglobe"] + sorted(Path("/home").glob("*/.brainglobe"))
+    roots += [Path.home() / ".brainglobe"]
+    # other users' atlases: /home/* (Linux), C:\Users\* (Windows), /Users/* (macOS)
+    for users in dict.fromkeys([Path.home().parent, Path("/home")]):
+        try:
+            roots += sorted(users.glob("*/.brainglobe"))
+        except OSError:
+            pass
     dirs = []
     for r in dict.fromkeys(roots):
         try:
@@ -689,6 +704,36 @@ def write_meshes(path: Path, annot: np.ndarray, term_labels: dict, voxel_nm) -> 
     return written
 
 
+def region_centers(annot: np.ndarray, term_labels: dict) -> dict[str, list[float]]:
+    """Per term id: a voxel inside the region near its centre (x, y, z, viewer voxel
+    coordinates) followed by its bounding-box size in voxels. Used by the search panel
+    to jump to a region."""
+    slices = ndimage.find_objects(annot.astype(np.int32, copy=False))
+    n_lut = int(annot.max()) + 1
+    centers = {}
+    for tid, labels in term_labels.items():
+        labels = [lab for lab in labels if 0 < lab < n_lut and slices[lab - 1] is not None]
+        if not labels:
+            continue
+        boxes = [slices[lab - 1] for lab in labels]
+        lo = np.array([min(b[d].start for b in boxes) for d in range(3)])
+        hi = np.array([max(b[d].stop for b in boxes) for d in range(3)])
+        lut = np.zeros(n_lut, dtype=bool)
+        lut[labels] = True
+        mask = lut[annot[lo[0]:hi[0], lo[1]:hi[1], lo[2]:hi[2]]]
+        c = np.array(ndimage.center_of_mass(mask))
+        ci = tuple(np.clip(np.round(c).astype(int), 0, np.array(mask.shape) - 1))
+        if not mask[ci]:  # non-convex region: take the region voxel nearest the centroid
+            step = max(1, int(round((mask.size / 4e6) ** (1 / 3))))
+            pts = np.argwhere(mask[::step, ::step, ::step]) * step
+            if not len(pts):
+                pts = np.argwhere(mask)
+            c = pts[np.argmin(((pts - c) ** 2).sum(1))].astype(float)
+        centers[str(tid)] = [round(float(v), 1) for v in (c + lo + 0.5)] + \
+                            [int(v) for v in (hi - lo)]
+    return centers
+
+
 def extra_names(sample: Sample, onto: Ontology, key: str, values) -> dict[int, str]:
     names = {}
     if key == "segments" and sample.manifest.get("segments_csv"):
@@ -821,6 +866,344 @@ def export(sample: Sample, out: Path, atlas_dir_override, meshes: bool) -> dict:
         print(f"  meshes: {len(written)}")
     meta["meshes"] = meshes
     meta["colors"] = colors
+    print("  region centres (for search) ...")
+    meta["centers"] = region_centers(annot, term_labels)
+    return meta
+
+
+# --------------------------------------------------------------------------
+# Zoom: a LightSuite multires ROI (e.g. 3.2x) shown at native resolution
+# --------------------------------------------------------------------------
+#
+# Nothing is registered or resampled here. The raw ROI TIFFs are converted as they
+# are (s0 = native voxels) and placed with ONE affine built only from parameters the
+# multires pipeline already saved:
+#
+#   ROI index --pair manifest--> ROI physical (um)
+#             --roi_to_overview_tform (landmark fit)--> overview physical
+#             --inverse of the elastix chain (TransformParameters.*.txt)--> overview physical
+#             --pair manifest--> overview index (the 1x stack the atlas run used)
+#             --registration-grid downsampling + permute_sample_to_atlas--> atlas viewer voxel
+#
+# The elastix chain maps fixed (overview) points to moving points, and the moving
+# image is the ROI resampled through inv(roi_to_overview_tform), so
+# overview_phys = inv(E) @ L @ roi_phys.
+
+ZOOM_VERSION = 1
+ZOOM_COLORS = {"488": "#00ff00", "561": "#ff00ff", "640": "#00ffff", "405": "#4080ff"}
+
+
+def _resolve_near(p: str | None, *dirs: Path) -> Path | None:
+    """A recorded path, or the same file name in one of *dirs* if the data moved."""
+    if not p:
+        return None
+    p = Path(p)
+    if p.exists():
+        return p
+    for d in dirs:
+        if d is not None and (d / p.name).exists():
+            return d / p.name
+    return None
+
+
+def _shift(v) -> np.ndarray:
+    m = np.eye(4)
+    m[:3, 3] = v
+    return m
+
+
+def _index_to_physical(spec: dict) -> np.ndarray:
+    """lightsuite.multires.spec_geometry.index_xyz_to_physical as a 4x4 (x=column,
+    y=row, z=page of the TIFF; index = voxel centre)."""
+    m = np.eye(4)
+    m[:3, :3] = np.asarray(spec["direction"], dtype=float).reshape(3, 3) @ np.diag(spec["spacing_um"])
+    m[:3, 3] = spec["origin_um"]
+    return m
+
+
+def _read_elastix(path: Path) -> dict:
+    out = {}
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if line.startswith("(") and line.endswith(")"):
+            key, *vals = line[1:-1].split()
+            out[key] = [v.strip('"') for v in vals]
+    return out
+
+
+def _elastix_matrix(p: dict, path: Path) -> np.ndarray:
+    """One elastix transform (fixed -> moving point) as a 4x4: A (x - c) + c + t."""
+    kind = p["Transform"][0]
+    par = [float(v) for v in p["TransformParameters"]]
+    c = np.array([float(v) for v in p.get("CenterOfRotationPoint", [0, 0, 0])])
+    if kind == "TranslationTransform":
+        a, t = np.eye(3), np.array(par)
+    elif kind == "EulerTransform":
+        rx, ry, rz = par[:3]
+        t = np.array(par[3:6])
+        cx, sx, cy, sy, cz, sz = (np.cos(rx), np.sin(rx), np.cos(ry), np.sin(ry),
+                                  np.cos(rz), np.sin(rz))
+        Rx = np.array([[1, 0, 0], [0, cx, -sx], [0, sx, cx]])
+        Ry = np.array([[cy, 0, sy], [0, 1, 0], [-sy, 0, cy]])
+        Rz = np.array([[cz, -sz, 0], [sz, cz, 0], [0, 0, 1]])
+        zyx = p.get("ComputeZYX", ["false"])[0].lower() == "true"
+        a = Rz @ Ry @ Rx if zyx else Rz @ Rx @ Ry  # itk::Euler3DTransform
+    elif kind == "AffineTransform":
+        a, t = np.array(par[:9]).reshape(3, 3), np.array(par[9:12])
+    else:
+        sys.exit(f"{path.name}: elastix '{kind}' is not affine, so the zoom cannot be "
+                 "placed with one matrix (only Translation, Euler, Affine are supported).")
+    m = np.eye(4)
+    m[:3, :3] = a
+    m[:3, 3] = t + c - a @ c
+    return m
+
+
+def _elastix_chain(last: Path) -> np.ndarray:
+    """Composite fixed -> moving map of *last* and its InitialTransformParameterFileName chain."""
+    p = _read_elastix(last)
+    m = _elastix_matrix(p, last)
+    init = p.get("InitialTransformParameterFileName", ["NoInitialTransform"])[0]
+    if init != "NoInitialTransform":
+        init_path = _resolve_near(init, last.parent)
+        if init_path is None:
+            sys.exit(f"{last.name}: initial transform {init} not found")
+        how = p.get("HowToCombineTransforms", ["Compose"])[0]
+        if how != "Compose":
+            sys.exit(f"{last.name}: HowToCombineTransforms {how} is not supported")
+        m = m @ _elastix_chain(init_path)  # T(x) = T_last(T_init(x))
+    return m
+
+
+def _registration_grid_matrix(sample: Sample, overview: dict) -> np.ndarray:
+    """Overview-stack voxel (x=column, y=row, z=page) -> atlas viewer voxel (centres).
+
+    Reproduces lightsuite.preprocess.slice_ops: XY = integer stride then a
+    corner-aligned linear zoom to ceil(n * voxel / registres), Z = linear
+    interpolation at native plane k * registres / voxel_z. Then the viewer's
+    permute_brain_volume(perm) + to_xyz.
+    """
+    rp = sample.root / "regopts.json"
+    if not rp.is_file():
+        sys.exit(f"--zoom needs {rp} (native stack size and voxel size of the atlas run)")
+    r = json.loads(rp.read_text(encoding="utf-8"))
+    ny, nx, nz = int(r["ny"]), int(r["nx"]), int(r["nz"])
+    vx, vy, vz = (float(v) for v in r["voxel_um"])
+    res = float(r.get("registres_um", 20.0))
+
+    o_nz, o_ny, o_nx = (int(v) for v in overview["shape_zyx"])
+    if (o_nx, o_ny, o_nz) != (nx, ny, nz) or not np.allclose(overview["spacing_um"], [vx, vy, vz]):
+        sys.exit(f"The zoom's overview stack {overview['volume_path']} "
+                 f"({o_nx}x{o_ny}x{o_nz} at {overview['spacing_um']} um) is not the stack the "
+                 f"atlas registration used ({nx}x{ny}x{nz} at {[vx, vy, vz]} um).")
+
+    sxy, sz = vx / res, vz / res
+    new_h, new_w, new_z = (max(1, int(np.ceil(ny * sxy))), max(1, int(np.ceil(nx * sxy))),
+                           max(1, int(np.ceil(nz * sz))))
+
+    def xy_factor(n, new):  # native index per grid index
+        if np.isclose(sxy, 1.0) or new == n:
+            return 1.0
+        stride = max(1, min(ny // new_h, nx // new_w))
+        n_s = len(range(0, n, stride))
+        return float(stride) if n_s == new else stride * (n_s - 1) / (new - 1)
+
+    fy, fx = xy_factor(ny, new_h), xy_factor(nx, new_w)
+    fz = 1.0 / sz if new_z > 1 else 1.0
+    # native (x, y, z) -> grid (Y, X, Z)
+    g = np.zeros((4, 4))
+    g[0, 1], g[1, 0], g[2, 2], g[3, 3] = 1 / fy, 1 / fx, 1 / fz, 1
+    # permute_brain_volume on (Y, X, Z), then to_xyz swaps the first two axes
+    n_grid = (new_h, new_w, new_z)
+    p = np.zeros((4, 4))
+    p[3, 3] = 1
+    for d, v in enumerate(sample.perm):
+        src = abs(v) - 1
+        if v < 0:
+            p[d, src], p[d, 3] = -1, n_grid[src] - 1
+        else:
+            p[d, src] = 1
+    swap = np.eye(4)[[1, 0, 2, 3]]
+    return swap @ p @ g
+
+
+def _zoom_tag(label: str) -> str:
+    tag = re.sub(r"(_\d+)+$", "", label or "")
+    return re.sub(r"\W+", "_", tag) or "zoom"
+
+
+class Zoom:
+    """A multires results folder (multires_regopts.json) placed in the atlas viewer."""
+
+    def __init__(self, root: Path, sample: Sample, atlas_info: dict):
+        root = root.expanduser().resolve()
+        found = [root] if (root / "multires_regopts.json").is_file() else \
+            sorted(p.parent for p in root.glob("*/multires_regopts.json"))
+        if len(found) != 1:
+            sys.exit(f"--zoom {root}: expected one folder with multires_regopts.json, "
+                     f"found {len(found)}")
+        self.root = root = found[0]
+        self.regopts = ro = json.loads((root / "multires_regopts.json").read_text(encoding="utf-8"))
+        pair_path = _resolve_near(ro.get("pair_manifest_path"), root / "converted", root)
+        if pair_path is None:
+            sys.exit(f"{root}: pair manifest {ro.get('pair_manifest_path')} not found")
+        self.pair = json.loads(pair_path.read_text(encoding="utf-8"))
+        self.tag = _zoom_tag(ro.get("pair_label") or self.pair.get("pair_label", ""))
+
+        # channels: name -> ROI spec (each with its own volume_path)
+        chans = self.pair.get("channels") or {}
+        self.channels = {str(k): dict(v["roi"]) for k, v in sorted(chans.items())}
+        if not self.channels:
+            self.channels = {str(self.pair.get("reference_channel") or "roi"): dict(self.pair["roi"])}
+        for name, spec in self.channels.items():
+            path = _resolve_near(spec["volume_path"])
+            if path is None:
+                sys.exit(f"{root}: ROI TIFF for channel {name} not found: {spec['volume_path']}")
+            spec["_path"] = path
+
+        # elastix chain (the last file holds the full InitialTransform chain)
+        e_dir = _resolve_near(ro.get("elastix_output_dir"), root / "elastix_roi_to_overview")
+        tps = [_resolve_near(t, e_dir) for t in ro.get("transform_paths") or []]
+        if not tps and e_dir is not None:
+            tps = sorted(e_dir.glob("TransformParameters.*.txt"))
+        if not tps or any(t is None for t in tps):
+            sys.exit(f"{root}: elastix TransformParameters files not found")
+        self.transform_files = tps
+        E = _elastix_chain(tps[-1])
+        L = np.asarray(ro["roi_to_overview_tform"], float) if ro.get("roi_to_overview_tform") \
+            else np.eye(4)  # geometry_mode 'metadata': stage positions only
+
+        ref = str(self.pair.get("reference_channel") or next(iter(self.channels)))
+        ref_pair = chans.get(ref, self.pair)
+        overview, roi = ref_pair["overview"], ref_pair["roi"]
+        for name, spec in self.channels.items():
+            if not (np.allclose(spec["spacing_um"], roi["spacing_um"])
+                    and np.allclose(spec["origin_um"], roi["origin_um"])
+                    and list(spec["shape_zyx"]) == list(roi["shape_zyx"])):
+                sys.exit(f"{root}: channel {name} ROI geometry differs from the reference "
+                         f"channel {ref}; one transform cannot place both.")
+        self.shape_zyx = [int(v) for v in roi["shape_zyx"]]
+
+        # ROI voxel centre -> overview voxel centre -> atlas viewer voxel centre
+        self.roi_to_overview_index = (np.linalg.inv(_index_to_physical(overview))
+                                      @ np.linalg.inv(E) @ L @ _index_to_physical(roi))
+        to_atlas = _registration_grid_matrix(sample, overview) @ self.roi_to_overview_index
+        # Neuroglancer coordinates: voxel i spans [i, i+1), its centre is i + 0.5
+        self.matrix = (_shift(0.5) @ to_atlas @ _shift(-0.5))[:3].tolist()
+        self.atlas_scale_m = [v * 1e-9 for v in atlas_info["scales"][0]["resolution"]]
+        nz_, ny_, nx_ = self.shape_zyx
+        self.center = (np.array(self.matrix) @ np.array([nx_ / 2, ny_ / 2, nz_ / 2, 1.0])).tolist()
+        corners = np.array([[x, y, z, 1.0] for x in (0, nx_) for y in (0, ny_) for z in (0, nz_)])
+        pts = corners @ np.array(self.matrix).T
+        self.extent = (pts.max(0) - pts.min(0)).tolist()  # ROI size in viewer voxels (x, y, z)
+
+    def out_dir(self, out_arg: str | None) -> Path:
+        if out_arg:
+            return Path(out_arg).expanduser() / f"zoom_{self.tag}"
+        out = self.root / "neuroglancer"
+        if os.access(self.root, os.W_OK):
+            return out
+        h = hashlib.sha1(str(self.root).encode()).hexdigest()[:8]
+        return Path.home() / ".cache" / "lightsuite-neuroglancer" / f"zoom_{self.tag}-{h}"
+
+    def signature(self) -> str:
+        h = hashlib.sha1(f"zoom{ZOOM_VERSION}|{CHUNK}".encode())
+        for name, spec in self.channels.items():
+            st = spec["_path"].stat()
+            h.update(f"|{name}|{spec['_path']}|{st.st_size}|{st.st_mtime_ns}|"
+                     f"{spec['spacing_um']}".encode())
+        return h.hexdigest()
+
+
+def _halve(v: np.ndarray) -> np.ndarray:
+    """2x2x2 mean (Z, Y, X); odd sizes repeat the last plane (corner-aligned pyramid)."""
+    Z, Y, X = v.shape
+    out = np.empty(((Z + 1) // 2, (Y + 1) // 2, (X + 1) // 2), dtype=v.dtype)
+    for z0 in range(0, Z, 64):
+        b = v[z0:z0 + 64]
+        b = np.pad(b, [(0, s % 2) for s in b.shape], mode="edge").astype(np.uint32)
+        bz, by, bx = b.shape
+        s = b.reshape(bz // 2, 2, by // 2, 2, bx // 2, 2).sum(axis=(1, 3, 5))
+        out[z0 // 2:z0 // 2 + bz // 2] = ((s + 4) // 8).astype(v.dtype)
+    return out
+
+
+def _load_stack_zyx(path: Path) -> np.ndarray:
+    try:
+        return np.array(tifffile.memmap(path, mode="r"))
+    except (ValueError, OSError):
+        with tifffile.TiffFile(path) as tf:
+            return np.stack([p.asarray() for p in tf.pages])
+
+
+def write_zoom_channel(path: Path, tif: Path, voxel_um_xyz) -> list[float]:
+    """Raw multi-page TIFF -> precomputed multiscale image (s0 = native voxels)."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    print(f"  reading {tif.name} ...")
+    vol = _load_stack_zyx(tif)
+    if vol.ndim != 3:
+        sys.exit(f"{tif}: expected a 3D stack, got shape {vol.shape}")
+    if path.exists():
+        shutil.rmtree(path)
+    path.mkdir(parents=True)
+    scales, level, k, sample_vals = [], vol, 0, None
+    with ThreadPoolExecutor(max_workers=min(16, os.cpu_count() or 4)) as pool:
+        while True:
+            Z, Y, X = level.shape
+            key = f"s{k}"
+            (path / key).mkdir()
+
+            def write(z0, level=level, key=key, Z=Z, Y=Y, X=X):
+                for y0 in range(0, Y, CHUNK):
+                    for x0 in range(0, X, CHUNK):
+                        z1, y1, x1 = min(z0 + CHUNK, Z), min(y0 + CHUNK, Y), min(x0 + CHUNK, X)
+                        # (Z, Y, X) C order == x fastest-varying, as raw precomputed wants
+                        (path / key / f"{x0}-{x1}_{y0}-{y1}_{z0}-{z1}").write_bytes(
+                            np.ascontiguousarray(level[z0:z1, y0:y1, x0:x1]).tobytes())
+
+            list(pool.map(write, range(0, Z, CHUNK)))
+            f = 2 ** k
+            scales.append({"key": key, "size": [X, Y, Z],
+                           "resolution": [float(v) * 1000 * f for v in voxel_um_xyz],
+                           "voxel_offset": [0, 0, 0], "chunk_sizes": [[CHUNK, CHUNK, CHUNK]],
+                           "encoding": "raw"})
+            print(f"    {key}: {X}x{Y}x{Z}")
+            if sample_vals is None and (k == 2 or max(X, Y, Z) <= 2 * CHUNK):
+                sample_vals = level[level > 0]
+            if max(X, Y, Z) <= 2 * CHUNK:
+                break
+            level, k = _halve(level), k + 1
+    info = {"@type": "neuroglancer_multiscale_volume", "type": "image",
+            "data_type": str(vol.dtype), "num_channels": 1, "scales": scales}
+    (path / "info").write_text(json.dumps(info))  # written last: marks a complete conversion
+    if sample_vals is None or not sample_vals.size:
+        sample_vals = level.ravel()
+    return [float(v) for v in np.percentile(sample_vals, [1, 99.9])]
+
+
+def prepare_zoom(zoom: Zoom, out_arg: str | None, reexport: bool) -> dict:
+    out = zoom.out_dir(out_arg)
+    meta_path = out / "zoom_meta.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.is_file() else {}
+    sig = zoom.signature()
+    if reexport or meta.get("signature") != sig or \
+            not all((out / ch / "info").is_file() for ch in zoom.channels):
+        print(f"Converting zoom {zoom.root} -> {out}")
+        out.mkdir(parents=True, exist_ok=True)
+        meta = {"version": ZOOM_VERSION, "ranges": {}}
+        for ch, spec in zoom.channels.items():
+            meta["ranges"][ch] = write_zoom_channel(out / ch, spec["_path"], spec["spacing_um"])
+        meta["signature"] = sig
+    else:
+        print(f"Using cached zoom conversion in {out}")
+    # the placement is cheap and always recomputed from the saved parameters
+    meta.update({"root": str(zoom.root), "tag": zoom.tag, "channels": list(zoom.channels),
+                 "matrix_roi_voxel_to_atlas_viewer_voxel": zoom.matrix,
+                 "atlas_viewer_voxel_m": zoom.atlas_scale_m,
+                 "transform_files": [str(t) for t in zoom.transform_files]})
+    meta_path.write_text(json.dumps(meta, indent=1))
+    meta["dir"] = out
     return meta
 
 
@@ -828,10 +1211,592 @@ def export(sample: Sample, out: Path, atlas_dir_override, meshes: bool) -> dict:
 # Viewer
 # --------------------------------------------------------------------------
 
+# --------------------------------------------------------------------------
+# Channel look-up tables (LUTs)
+# --------------------------------------------------------------------------
+#
+# Each LUT is turned into a Neuroglancer shader. The "normalized" invlerp control
+# (contrast range) is kept when the LUT changes. Colormaps are 33 samples of the
+# matplotlib maps, linearly interpolated in the shader (error < 1%).
+
+_TABLES = {  # 33 samples of the matplotlib colormaps, as 0-255 RGB
+    "inferno": ("000004 040312 0b0724 150b37 210c4a 2f0a5b 3d0965 4a0c6b 57106e 64156e 71196e "
+             "7d1e6d 8a226a 972766 a32c61 b0315b bc3754 c73e4c d24644 db503b e45a31 eb6628 "
+             "f1731d f68013 f98e09 fb9d07 fcac11 fbbc21 f9cb35 f5db4c f2ea69 f3f68a fcffa4").split(),
+    "magma": ("000004 030312 0a0822 130d34 1d1147 29115a 36106b 440f76 51127c 5d177f 6a1c81 "
+             "762181 832681 902a81 9c2e7f aa337d b73779 c43c75 d0416f dc4869 e75263 ef5d5e "
+             "f56b5c f9795d fc8961 fd9869 fea772 feb67c fec488 fed395 fde2a3 fcf0b2 fcfdbf").split(),
+    "plasma": ("0d0887 220690 310597 3f049c 4c02a1 5901a5 6600a7 7201a8 7e03a8 8a09a5 9511a1 "
+             "a01a9c aa2395 b32c8e bc3587 c43e7f cc4778 d35171 da5a6a e06363 e66c5c eb7655 "
+             "f0804e f58b47 f89540 fba139 fdac33 feb82c fdc527 fcd225 f8df25 f4ed27 f0f921").split(),
+    "viridis": ("440154 470d60 48186a 482374 472d7b 453781 424086 3e4989 3b528b 375b8d 33638d "
+             "2f6b8e 2c728e 297a8e 26828e 23898e 21918c 1f988b 1fa088 22a785 28ae80 32b67a "
+             "3fbc73 4ec36b 5ec962 70cf57 84d44b 98d83e addc30 c2df23 d8e219 ece51b fde725").split(),
+    "turbo": ("30123b 392a73 4040a2 4456c7 466be3 4680f6 4294ff 37a8fa 28bceb 1ccdd8 18ddc2 "
+             "1fe9af 32f298 4ef97d 6dfe62 8bff4b a4fc3c b9f635 cdec34 dfdf37 eecf3a f8be39 "
+             "fdac34 fe962b fb7e21 f46617 eb500e df3f08 d02f05 be2102 a91601 920b01 7a0403").split(),
+}
+
+
+# name -> (label, kind, parameter). kind: "color" (black -> colour), "table", "fn"
+LUTS = {
+    "grays": ("Grays", "color", "#ffffff"),
+    "green": ("Green", "color", "#00ff00"),
+    "red": ("Red", "color", "#ff0000"),
+    "blue": ("Blue", "color", "#0060ff"),
+    "magenta": ("Magenta", "color", "#ff00ff"),
+    "cyan": ("Cyan", "color", "#00ffff"),
+    "yellow": ("Yellow", "color", "#ffff00"),
+    "fire": ("Fire (hot)", "fn", "fire"),
+    "inferno": ("Inferno", "table", "inferno"),
+    "magma": ("Magma", "table", "magma"),
+    "plasma": ("Plasma", "table", "plasma"),
+    "viridis": ("Viridis", "table", "viridis"),
+    "turbo": ("Turbo", "table", "turbo"),
+    "jet": ("Jet", "fn", "jet"),
+    "hilo": ("HiLo (saturation check)", "fn", "hilo"),
+}
+_LUT_FOR_COLOR = {"#ffffff": "grays", "#00ff00": "green", "#ff00ff": "magenta",
+                  "#00ffff": "cyan", "#ffff00": "yellow", "#4080ff": "blue", "#ff0000": "red"}
+
+
+def _hex_rgb(h: str) -> np.ndarray:
+    return np.array([int(h[i:i + 2], 16) / 255 for i in (1, 3, 5)])
+
+
+def lut_rgb(lut: str, t: np.ndarray) -> np.ndarray:
+    """The LUT evaluated in numpy (same formulas as the shader), for the panel swatches."""
+    _, kind, par = LUTS[lut]
+    t = np.clip(np.asarray(t, dtype=float), 0, 1)[:, None]
+    if kind == "color":
+        rgb = t * _hex_rgb(par)
+    elif kind == "table":
+        tab = np.array([_hex_rgb("#" + h) for h in _TABLES[par]])
+        x = np.linspace(0, 1, len(tab))
+        rgb = np.stack([np.interp(t[:, 0], x, tab[:, k]) for k in range(3)], axis=1)
+    elif par == "fire":
+        rgb = np.hstack([3 * t, 3 * t - 1, 3 * t - 2])
+    elif par == "jet":
+        rgb = np.hstack([1.5 - np.abs(4 * t - 3), 1.5 - np.abs(4 * t - 2), 1.5 - np.abs(4 * t - 1)])
+    else:  # hilo: gray, with blue at the bottom and red at the top of the range
+        rgb = np.repeat(t, 3, axis=1)
+        rgb[t[:, 0] <= 0.0] = (0, 0, 1)
+        rgb[t[:, 0] >= 1.0] = (1, 0, 0)
+    return np.clip(rgb, 0, 1)
+
+
+def lut_css(lut: str, invert: bool = False) -> str:
+    t = np.linspace(0, 1, 9)
+    if lut == "hilo":  # show the clipping colours as narrow end bands
+        t = np.array([0, 0.001, 0.25, 0.5, 0.75, 0.999, 1.0])
+    rgb = lut_rgb(lut, 1 - t if invert else t)
+    stops = ", ".join(f"rgb({int(r * 255)},{int(g * 255)},{int(b * 255)}) {p * 100:.1f}%"
+                      for (r, g, b), p in zip(rgb, t))
+    return f"linear-gradient(90deg, {stops})"
+
+
+def lut_shader(lut: str, invert: bool = False) -> str:
+    _, kind, par = LUTS[lut]
+    head = ""
+    if kind == "color":
+        head = f'#uicontrol vec3 color color(default="{par}")\n'
+        body = "vec3 rgb = color * t;"
+    elif kind == "table":
+        tab = _TABLES[par]
+        vals = ", ".join("vec3(%.4f, %.4f, %.4f)" % tuple(_hex_rgb("#" + h)) for h in tab)
+        n = len(tab) - 1
+        head = f"const vec3 LUT[{n + 1}] = vec3[{n + 1}]({vals});\n"
+        body = (f"float x = t * {n}.0; int i = int(min(floor(x), {n - 1}.0));"
+                " vec3 rgb = mix(LUT[i], LUT[i + 1], x - float(i));")
+    elif par == "fire":
+        body = "vec3 rgb = clamp(vec3(3.0 * t, 3.0 * t - 1.0, 3.0 * t - 2.0), 0.0, 1.0);"
+    elif par == "jet":
+        body = ("vec3 rgb = clamp(vec3(1.5 - abs(4.0 * t - 3.0), 1.5 - abs(4.0 * t - 2.0),"
+                " 1.5 - abs(4.0 * t - 1.0)), 0.0, 1.0);")
+    else:
+        body = ("vec3 rgb = vec3(t); if (t <= 0.0) rgb = vec3(0.0, 0.0, 1.0);"
+                " if (t >= 1.0) rgb = vec3(1.0, 0.0, 0.0);")
+    t = "1.0 - clamp(normalized(), 0.0, 1.0)" if invert else "clamp(normalized(), 0.0, 1.0)"
+    return (f"// lightsuite-lut: {lut}{' inverted' if invert else ''}\n{head}"
+            "#uicontrol invlerp normalized\n"
+            f"void main() {{\n  float t = {t};\n  {body}\n  emitRGB(rgb);\n}}\n")
+
+
+# --------------------------------------------------------------------------
+# Region search
+# --------------------------------------------------------------------------
+
+def _norm(s: str) -> str:
+    """Lower case, no accents/punctuation, British spellings folded (coeruleus = ceruleus)."""
+    s = unicodedata.normalize("NFKD", str(s)).encode("ascii", "ignore").decode().lower()
+    s = re.sub(r"[^a-z0-9]+", " ", s)
+    s = s.replace("ae", "e").replace("oe", "e")
+    return " ".join(s.split())
+
+
+class RegionIndex:
+    """Every region of every hierarchy level / label layer, searchable by name or acronym."""
+
+    def __init__(self, out: Path, meta: dict):
+        self.entries = []
+        seen = set()
+        layers = [(lv, True) for lv in meta["levels"]] + [(ex, False) for ex in meta["extra"]]
+        for rank, (lv, is_level) in enumerate(layers):
+            info = out / lv["dir"] / "segment_properties" / "info"
+            if not info.is_file():
+                continue
+            inline = json.loads(info.read_text(encoding="utf-8"))["inline"]
+            props = {p["id"]: p["values"] for p in inline["properties"]
+                     if p["id"] in ("label", "description")}
+            labels = props.get("label", [""] * len(inline["ids"]))
+            names = props.get("description", labels)
+            for sid, acr, name in zip(inline["ids"], labels, names):
+                key = (acr.lower(), name.lower())
+                if key in seen:  # same region at a coarser level: keep the finest one
+                    continue
+                seen.add(key)
+                self.entries.append({
+                    "layer": lv["name"], "id": int(sid), "acronym": acr, "name": name,
+                    "rank": rank, "is_level": is_level,
+                    "_n": _norm(name), "_a": _norm(acr), "_toks": _norm(name).split()})
+
+    @staticmethod
+    def _score(q: str, qtoks: list[str], e: dict) -> float:
+        n, a = e["_n"], e["_a"]
+        if q == a or q == n:
+            return 100
+        if n.startswith(q):
+            return 92
+        if a.startswith(q) and len(q) >= 2:
+            return 88
+        if f" {q}" in f" {n}":
+            return 84
+        if q in n:
+            return 78
+        toks = e["_toks"]
+        if all(any(t.startswith(qt) for t in toks) for qt in qtoks):
+            return 74
+        # fuzzy: every typed word close to some word of the name (typos, spellings)
+        sims = [max((difflib.SequenceMatcher(None, qt, t).ratio() for t in toks), default=0)
+                for qt in qtoks]
+        fuzzy = sum(sims) / len(sims) if sims else 0
+        whole = difflib.SequenceMatcher(None, q, n).ratio()
+        best = max(fuzzy if min(sims, default=0) >= 0.6 else 0, whole)
+        return 70 * best if best >= 0.72 else 0
+
+    def search(self, query: str, limit: int = 25) -> list[dict]:
+        q = _norm(query)
+        if not q:
+            return []
+        if q.isdigit():
+            hits = [(100, e) for e in self.entries if e["id"] == int(q)]
+        else:
+            qtoks = q.split()
+            hits = [(s, e) for e in self.entries if (s := self._score(q, qtoks, e)) > 0]
+        hits.sort(key=lambda se: (-se[0], se[1]["rank"], len(se[1]["name"])))
+        return [{k: v for k, v in e.items() if not k.startswith("_")} | {"score": round(s)}
+                for s, e in hits[:limit]]
+
+
+# --------------------------------------------------------------------------
+# Control panel (search + channel LUTs) next to the Neuroglancer viewer
+# --------------------------------------------------------------------------
+
+class ViewerApp:
+    """Server-side actions of the panel; all of them edit the Neuroglancer viewer state."""
+
+    def __init__(self, viewer, meta: dict, channel_layers: list[str], level_names: list[str],
+                 seg_names: list[str]):
+        self.viewer, self.meta = viewer, meta
+        self.channels = channel_layers
+        self.level_names, self.seg_names = level_names, seg_names
+        self.token = secrets.token_urlsafe(16)
+        self.luts = {}  # layer -> {"lut", "invert"}
+        self.highlight = []  # [(layer, id, label)]
+        self._saved_vis, self._saved_alpha, self._saved_view = None, {}, (None, None)
+        self.index: RegionIndex | None = None
+        self.viewer_url = ""
+        self.lock = threading.Lock()
+
+    # --- hierarchy -------------------------------------------------------
+    def pins_for(self, layer: str, seg: int) -> dict:
+        """The region and the regions containing it, at every level layer."""
+        pinned = {layer: seg}
+        if layer in self.level_names:
+            levels = [self.level_names.index(layer)]
+        elif layer == "region meshes":
+            levels = range(len(self.level_names))
+        else:
+            return pinned
+        for k in levels:
+            row = next((r for r in self.meta["hierarchy"] if r[k] == seg), None)
+            if row is not None:
+                for j in range(k, len(self.level_names)):
+                    if row[j]:
+                        pinned.setdefault(self.level_names[j], row[j])
+                break
+        return pinned
+
+    def _selection(self, pinned: dict, position) -> dict:
+        order = {n: i for i, n in enumerate(self.seg_names)}
+        return {"position": [float(x) for x in position],
+                "layers": {n: {"value": str(pinned[n])}
+                           for n in sorted(pinned, key=lambda n: order.get(n, 99))}}
+
+    def _status(self, msg: str | None):
+        with self.viewer.config_state.txn() as c:
+            if msg:
+                c.status_messages["lightsuite"] = msg
+            else:
+                c.status_messages.pop("lightsuite", None)
+
+    # --- search ------------------------------------------------------------
+    def show_region(self, layer: str, seg: int, add: bool = False) -> dict:
+        center = self.meta.get("centers", {}).get(str(seg))
+        with self.lock, self.viewer.txn() as s:
+            if layer not in s.layers:
+                return {"error": f"no layer {layer}"}
+            seg_layers = [n for n in self.seg_names if n in s.layers and n != "region meshes"]
+            if self._saved_vis is None:  # view before the first search, restored by clear()
+                self._saved_vis = {n: s.layers[n].visible for n in seg_layers}
+                self._saved_alpha = {n: s.layers[n].selected_alpha for n in seg_layers}
+                self._saved_view = (s.position, s.cross_section_scale)
+            if not add:
+                self.highlight = []
+                for n in seg_layers:
+                    s.layers[n].segments = set()
+                    s.layers[n].visible = False
+            self.highlight = [h for h in self.highlight if h[:2] != (layer, seg)]
+            label = next((e for e in self.index.entries if e["layer"] == layer and e["id"] == seg),
+                         {"name": str(seg), "acronym": ""})
+            self.highlight.append((layer, seg, f"{label['name']} ({label['acronym']})"))
+            for n, sid, _ in self.highlight:
+                s.layers[n].visible = True
+                s.layers[n].selected_alpha = 0.7
+                s.layers[n].segments.add(sid)
+            if "region meshes" in s.layers:
+                s.layers["region meshes"].segments = {
+                    sid for n, sid, _ in self.highlight if n in self.level_names}
+            if center:
+                s.position = center[:3]
+                extent = max(center[3:6])
+                s.cross_section_scale = float(np.clip(extent * 1.8 / 500, 0.12, 1.5))
+            pinned = {}
+            for n, sid, _ in self.highlight:
+                for k, v in self.pins_for(n, sid).items():
+                    pinned.setdefault(k, v)
+            s._json_data["selection"] = self._selection(pinned, center[:3] if center else
+                                                        s.position)
+            s.selected_layer.layer = layer
+        names = "; ".join(h[2] for h in self.highlight)
+        self._status(f"Highlighted: {names}")
+        return {"ok": True, "highlight": [h[2] for h in self.highlight], "found": bool(center)}
+
+    def clear(self) -> dict:
+        with self.lock, self.viewer.txn() as s:
+            for n, vis in (self._saved_vis or {}).items():
+                if n in s.layers:
+                    s.layers[n].segments = set()
+                    s.layers[n].visible = vis
+                    s.layers[n].selected_alpha = self._saved_alpha[n]
+            if "region meshes" in s.layers:
+                s.layers["region meshes"].segments = set(self.meta.get("mesh_default", []))
+            if self._saved_vis is not None and self._saved_view[0] is not None:
+                s.position, s.cross_section_scale = self._saved_view
+            s._json_data["selection"] = {}
+            self._saved_vis, self.highlight = None, []
+        self._status(None)
+        return {"ok": True}
+
+    # --- channels ----------------------------------------------------------
+    def set_lut(self, layer: str, lut: str, invert: bool) -> dict:
+        if layer not in self.channels or lut not in LUTS:
+            return {"error": "unknown layer or LUT"}
+        with self.lock, self.viewer.txn() as s:
+            L = s.layers[layer]
+            ctl = L.to_json().get("shaderControls", {})
+            new = {"normalized": ctl["normalized"]} if "normalized" in ctl else {}
+            if LUTS[lut][1] == "color":
+                new["color"] = LUTS[lut][2]
+            L.shader = lut_shader(lut, invert)
+            L.shader_controls = new
+        self.luts[layer] = {"lut": lut, "invert": invert}
+        return {"ok": True}
+
+    def set_visible(self, layer: str, visible: bool) -> dict:
+        if layer not in self.channels:
+            return {"error": "unknown layer"}
+        with self.lock, self.viewer.txn() as s:
+            s.layers[layer].visible = visible
+        return {"ok": True}
+
+    def state(self) -> dict:
+        st = self.viewer.state
+        chans = []
+        for n in self.channels:
+            cur = self.luts.get(n, {"lut": "grays", "invert": False})
+            chans.append({"layer": n, "visible": bool(st.layers[n].visible) if n in st.layers
+                          else False, **cur})
+        return {"channels": chans, "highlight": [h[2] for h in self.highlight]}
+
+    def config(self, viewer_url: str) -> dict:
+        return {"token": self.token, "viewer_url": viewer_url, "sample": self.meta["sample"],
+                "luts": [{"id": k, "label": v[0], "css": lut_css(k),
+                          "css_inv": lut_css(k, True)} for k, v in LUTS.items()],
+                "regions": len(self.index.entries)}
+
+    # --- HTTP ------------------------------------------------------------------
+    def handle(self, method: str, path: str, query: dict, body: dict):
+        """Returns (status, content_type, bytes) for /lightsuite/... requests."""
+        if path in ("/lightsuite", "/lightsuite/"):
+            html = PANEL_HTML.replace("/*CONFIG*/null", json.dumps(self.config(self.viewer_url)))
+            return 200, "text/html; charset=utf-8", html.encode("utf-8")
+        tok = query.get("token", [""])[0] or body.get("token", "")
+        if not secrets.compare_digest(str(tok), self.token):
+            return 403, "application/json", b'{"error": "bad token"}'
+        api = path.removeprefix("/lightsuite/api/")
+        if api == "search":
+            res = {"results": self.index.search(query.get("q", [""])[0])}
+        elif api == "state":
+            res = self.state()
+        elif method == "POST" and api == "show":
+            res = self.show_region(str(body["layer"]), int(body["id"]), bool(body.get("add")))
+        elif method == "POST" and api == "clear":
+            res = self.clear()
+        elif method == "POST" and api == "lut":
+            res = self.set_lut(str(body["layer"]), str(body["lut"]), bool(body.get("invert")))
+        elif method == "POST" and api == "visible":
+            res = self.set_visible(str(body["layer"]), bool(body["visible"]))
+        else:
+            return 404, "application/json", b'{"error": "not found"}'
+        return 200, "application/json", json.dumps(res).encode("utf-8")
+
+
+PANEL_HTML = r"""<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LightSuite Viewer</title>
+<style>
+:root { --bg:#111315; --panel:#1a1d20; --line:#2c3034; --fg:#e6e7e8; --muted:#9aa0a6;
+        --accent:#6cb8e0; --hit:#23303a; }
+* { box-sizing:border-box; }
+html, body { margin:0; height:100%; background:var(--bg); color:var(--fg);
+             font:14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+.app { display:flex; height:100vh; }
+aside { width:310px; flex:none; background:var(--panel); border-right:1px solid var(--line);
+        display:flex; flex-direction:column; overflow:hidden; transition:width .15s; }
+.app.collapsed aside { width:0; border:0; }
+.inner { width:310px; padding:12px 14px; overflow-y:auto; flex:1; }
+iframe { flex:1; border:0; min-width:0; background:#000; }
+h1 { font-size:15px; margin:0 0 2px; }
+.sample { color:var(--muted); font-size:12px; margin-bottom:12px; word-break:break-all; }
+h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted);
+     margin:16px 0 6px; font-weight:600; }
+input[type=search] { width:100%; padding:8px 10px; border-radius:6px; border:1px solid var(--line);
+     background:#0f1113; color:var(--fg); font-size:14px; }
+input[type=search]:focus { outline:2px solid var(--accent); outline-offset:-1px; }
+ul.results { list-style:none; margin:6px 0 0; padding:0; max-height:42vh; overflow-y:auto; }
+ul.results li { padding:6px 8px; border-radius:5px; cursor:pointer; }
+ul.results li.active, ul.results li:hover { background:var(--hit); }
+.rname { display:block; }
+.rmeta { color:var(--muted); font-size:12px; }
+.hint { color:var(--muted); font-size:12px; margin:6px 0 0; }
+.current { margin-top:8px; padding:8px; border-radius:6px; background:#162229;
+           border:1px solid #24404f; font-size:13px; display:none; }
+.current.on { display:block; }
+button { background:#2a2f34; color:var(--fg); border:1px solid var(--line); border-radius:5px;
+         padding:4px 10px; cursor:pointer; font-size:13px; }
+button:hover { background:#343a40; }
+.chan { padding:8px 0; border-bottom:1px solid var(--line); }
+.chan-top { display:flex; align-items:center; gap:8px; }
+.chan-top label.name { flex:1; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+select { flex:1; background:#0f1113; color:var(--fg); border:1px solid var(--line); border-radius:5px;
+         padding:4px 6px; font-size:13px; min-width:0; }
+.chan-row { display:flex; gap:8px; align-items:center; margin-top:6px; }
+.swatch { height:10px; border-radius:3px; margin-top:6px; border:1px solid var(--line); }
+.inv { color:var(--muted); font-size:12px; white-space:nowrap; }
+.toggle { position:fixed; left:0; top:50%; z-index:5; transform:translateY(-50%);
+          border-radius:0 6px 6px 0; padding:10px 4px; display:none; }
+.app.collapsed .toggle { display:block; }
+.err { color:#f28b82; }
+@media (max-width: 700px) {
+  .app { flex-direction:column; }
+  aside { width:100%; max-height:45vh; border-right:0; border-bottom:1px solid var(--line); }
+  .inner { width:100%; }
+  .app.collapsed aside { width:100%; max-height:0; }
+  .toggle { top:0; left:50%; transform:translateX(-50%); border-radius:0 0 6px 6px; padding:2px 12px; }
+}
+</style></head>
+<body>
+<div class="app" id="app">
+  <aside><div class="inner">
+    <div style="display:flex;justify-content:space-between;align-items:start;gap:8px">
+      <div><h1>LightSuite viewer</h1><div class="sample" id="sample"></div></div>
+      <button id="hide" title="Hide panel">&#x2039;</button>
+    </div>
+
+    <h2>Find a region</h2>
+    <input type="search" id="q" placeholder="e.g. locus coeruleus, CA1, Isocortex" autocomplete="off" autofocus>
+    <ul class="results" id="results"></ul>
+    <p class="hint" id="hint">Type a name, acronym or ID. Enter shows the first match,
+      &uarr;&darr; to choose. Shift+click adds a region.</p>
+    <div class="current" id="current">
+      <div id="curtext"></div>
+      <div style="margin-top:6px"><button id="clear">Show all regions</button></div>
+    </div>
+
+    <h2>Channels</h2>
+    <div id="chans"></div>
+    <p class="hint">Contrast: use the range slider in the layer's Rendering tab in Neuroglancer.</p>
+  </div></aside>
+  <button class="toggle" id="show" title="Show panel">&#x203A;</button>
+  <iframe id="ng" title="Neuroglancer" allow="fullscreen"></iframe>
+</div>
+<script>
+const CFG = /*CONFIG*/null;
+const $ = id => document.getElementById(id);
+$("sample").textContent = CFG.sample + " · " + CFG.regions + " regions";
+$("ng").src = CFG.viewer_url;
+const api = (p, body) => fetch("/lightsuite/api/" + p + (body ? "" : (p.includes("?") ? "&" : "?") + "token=" + CFG.token),
+  body ? {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({...body, token:CFG.token})} : {})
+  .then(r => r.json());
+
+// ---- search
+let results = [], active = -1, timer = null, seq = 0;
+function render() {
+  const ul = $("results"); ul.innerHTML = "";
+  results.forEach((r, i) => {
+    const li = document.createElement("li");
+    if (i === active) li.className = "active";
+    const a = document.createElement("span"); a.className = "rname"; a.textContent = r.name;
+    const m = document.createElement("span"); m.className = "rmeta";
+    m.textContent = (r.acronym && r.acronym !== r.name ? r.acronym + " · " : "") + r.layer +
+                    (r.score < 70 ? " · similar" : "");
+    li.append(a, m);
+    li.onclick = ev => choose(i, ev.shiftKey);
+    ul.append(li);
+  });
+}
+function doSearch() {
+  const q = $("q").value.trim(), my = ++seq;
+  if (!q) { results = []; active = -1; render(); $("hint").classList.remove("err"); return; }
+  api("search?q=" + encodeURIComponent(q)).then(d => {
+    if (my !== seq) return;
+    results = d.results || []; active = results.length ? 0 : -1; render();
+    $("hint").textContent = results.length ? results.length + (results.length === 25 ? "+" : "") + " matches"
+                                            : "No region matches “" + q + "”.";
+    $("hint").classList.toggle("err", !results.length);
+  });
+}
+function choose(i, add) {
+  const r = results[i]; if (!r) return;
+  active = i; render();
+  api("show", {layer:r.layer, id:r.id, add:!!add}).then(showCurrent);
+}
+function showCurrent(d) {
+  const on = d && d.highlight && d.highlight.length;
+  $("current").classList.toggle("on", !!on);
+  if (on) $("curtext").textContent = "Highlighted: " + d.highlight.join("; ");
+}
+$("q").addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(doSearch, 120); });
+$("q").addEventListener("keydown", ev => {
+  if (ev.key === "ArrowDown") { active = Math.min(active + 1, results.length - 1); render(); ev.preventDefault(); }
+  else if (ev.key === "ArrowUp") { active = Math.max(active - 1, 0); render(); ev.preventDefault(); }
+  else if (ev.key === "Enter") { clearTimeout(timer); if (results.length) choose(Math.max(active, 0), ev.shiftKey); else doSearch(); }
+  else if (ev.key === "Escape") { $("q").value = ""; doSearch(); }
+});
+$("clear").onclick = () => api("clear", {}).then(() => showCurrent(null));
+
+// ---- channels
+const LUTS = Object.fromEntries(CFG.luts.map(l => [l.id, l]));
+function buildChannels(st) {
+  const box = $("chans"); box.innerHTML = "";
+  st.channels.forEach(c => {
+    const div = document.createElement("div"); div.className = "chan";
+    const id = "v_" + c.layer.replace(/\W/g, "_");
+    div.innerHTML = `<div class="chan-top"><input type="checkbox" id="${id}">
+        <label class="name" for="${id}"></label></div>
+      <div class="chan-row"><select aria-label="LUT"></select>
+        <label class="inv"><input type="checkbox"> invert</label></div>
+      <div class="swatch"></div>`;
+    div.querySelector("label.name").textContent = c.layer;
+    const vis = div.querySelector("#" + id), sel = div.querySelector("select"),
+          inv = div.querySelector(".inv input"), sw = div.querySelector(".swatch");
+    CFG.luts.forEach(l => sel.add(new Option(l.label, l.id)));
+    vis.checked = c.visible; sel.value = c.lut; inv.checked = c.invert;
+    const paint = () => sw.style.background = LUTS[sel.value][inv.checked ? "css_inv" : "css"];
+    paint();
+    const send = () => { paint(); api("lut", {layer:c.layer, lut:sel.value, invert:inv.checked}); };
+    sel.onchange = send; inv.onchange = send;
+    vis.onchange = () => api("visible", {layer:c.layer, visible:vis.checked});
+    div.dataset.layer = c.layer;
+    box.append(div);
+  });
+}
+function syncVisibility() {
+  api("state").then(st => st.channels.forEach(c => {
+    const d = document.querySelector(`.chan[data-layer="${CSS.escape(c.layer)}"] input[type=checkbox]`);
+    if (d) d.checked = c.visible;
+  })).catch(() => {});
+}
+api("state").then(st => { buildChannels(st); showCurrent(st); });
+setInterval(syncVisibility, 3000);
+
+$("hide").onclick = () => $("app").classList.add("collapsed");
+$("show").onclick = () => $("app").classList.remove("collapsed");
+</script>
+</body></html>
+"""
+
+
 class CORSHandler(http.server.SimpleHTTPRequestHandler):
+    def __init__(self, *args, mounts=None, app=None, **kwargs):
+        self.mounts = mounts or {}  # "/zoom/<tag>" -> folder served under that prefix
+        self.app = app  # ViewerApp: the /lightsuite/ panel and its API
+        super().__init__(*args, **kwargs)
+
+    def _app_request(self, method: str) -> bool:
+        url = urllib.parse.urlsplit(self.path)
+        if self.app is None or not url.path.startswith("/lightsuite"):
+            return False
+        body = {}
+        if method == "POST":
+            n = int(self.headers.get("Content-Length") or 0)
+            try:
+                body = json.loads(self.rfile.read(n) or b"{}")
+            except ValueError:
+                body = {}
+        try:
+            code, ctype, data = self.app.handle(method, url.path, urllib.parse.parse_qs(url.query),
+                                                body)
+        except (KeyError, ValueError, TypeError) as e:
+            code, ctype, data = 400, "application/json", json.dumps({"error": str(e)}).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(data)
+        return True
+
+    def do_GET(self):
+        if not self._app_request("GET"):
+            super().do_GET()
+
+    def do_POST(self):
+        if not self._app_request("POST"):
+            self.send_error(405)
+
     def translate_path(self, path):
         # mesh manifests "<id>:0" are stored as "<id>_0" (see write_meshes)
         path = re.sub(r":|%3[Aa]", "_", path.split("?", 1)[0].split("#", 1)[0])
+        for prefix, folder in self.mounts.items():
+            if path.startswith(prefix + "/"):
+                saved, self.directory = self.directory, str(folder)
+                try:
+                    return super().translate_path(path[len(prefix):])
+                finally:
+                    self.directory = saved
         return super().translate_path(path)
 
     def end_headers(self):
@@ -842,29 +1807,74 @@ class CORSHandler(http.server.SimpleHTTPRequestHandler):
         pass
 
 
-def open_viewer(out: Path, meta: dict, port: int, layout: str, browser: bool):
-    handler = functools.partial(CORSHandler, directory=str(out))
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", port), handler)
+class QuietHTTPServer(http.server.ThreadingHTTPServer):
+    daemon_threads = True
+
+    def handle_error(self, request, client_address):
+        # Neuroglancer cancels chunk requests it no longer needs (pan / zoom); the
+        # browser then closes the socket mid-transfer. That is normal, not an error.
+        if isinstance(sys.exc_info()[1], (BrokenPipeError, ConnectionResetError)):
+            return
+        super().handle_error(request, client_address)
+
+
+def open_viewer(out: Path, meta: dict, port: int, layout: str, browser: bool,
+                zooms: list | None = None):
+    zooms = zooms or []
+    mounts = {f"/zoom/{zm['tag']}": zm["dir"] for _, zm in zooms}
+    app_ref = {}  # filled below, once the viewer exists
+    handler = functools.partial(CORSHandler, directory=str(out), mounts=mounts)
+
+    def make_handler(*a, **kw):
+        return handler(*a, app=app_ref.get("app"), **kw)
+
+    server = QuietHTTPServer(("127.0.0.1", port), make_handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    src = f"precomputed://http://127.0.0.1:{server.server_address[1]}"
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    src = f"precomputed://{base}"
     colors = {int(k): v for k, v in meta["colors"].items()}
+    initial_luts = {}
 
     viewer = neuroglancer.Viewer()
     with viewer.txn() as s:
+        # Explicit global coordinate space (the registration grid). Without it, zoom
+        # values sent from Python (cross_section_scale) are read as metres per pixel.
+        res_nm = json.loads((out / "boundaries" / "info").read_text())["scales"][0]["resolution"]
+        s.dimensions = neuroglancer.CoordinateSpace(
+            names=["x", "y", "z"], units="m", scales=[r * 1e-9 for r in res_nm])
         for i, ch in enumerate(meta["channels"]):
-            color = CHANNEL_COLORS[i % len(CHANNEL_COLORS)]
+            lut = _LUT_FOR_COLOR[CHANNEL_COLORS[i % len(CHANNEL_COLORS)]]
+            initial_luts[ch] = lut
             s.layers[ch] = neuroglancer.ImageLayer(
-                source=f"{src}/{ch}",
-                shader=f'#uicontrol vec3 color color(default="{color}")\n'
-                       "#uicontrol invlerp normalized\n"
-                       "void main() { emitRGB(color * normalized()); }",
-                shader_controls={"normalized": {"range": meta["ranges"][ch]}})
+                source=f"{src}/{ch}", shader=lut_shader(lut),
+                shader_controls={"normalized": {"range": meta["ranges"][ch]},
+                                 "color": LUTS[lut][2]},
+                blend="default" if i == 0 else "additive")
             s.layers[ch].visible = i == 0
         if "template" in meta["images"]:
             s.layers["template"] = neuroglancer.ImageLayer(
                 source=f"{src}/template",
                 shader_controls={"normalized": {"range": meta["ranges"]["template"]}})
             s.layers["template"].visible = False
+        # zoom channels at native resolution, under the atlas outlines / labels
+        for zi, (zoom, zm) in enumerate(zooms):
+            space = neuroglancer.CoordinateSpace(names=["x", "y", "z"], units="m",
+                                                 scales=zoom.atlas_scale_m)
+            for ci, ch in enumerate(zm["channels"]):
+                color = ZOOM_COLORS.get(ch, CHANNEL_COLORS[(ci + 1) % len(CHANNEL_COLORS)])
+                lut = _LUT_FOR_COLOR.get(color, "grays")
+                initial_luts[f"{zoom.tag} {ch}"] = lut
+                s.layers[f"{zoom.tag} {ch}"] = neuroglancer.ImageLayer(
+                    source=neuroglancer.LayerDataSource(
+                        url=f"{src}/zoom/{zoom.tag}/{ch}",
+                        transform=neuroglancer.CoordinateSpaceTransform(
+                            output_dimensions=space, matrix=zoom.matrix)),
+                    shader=lut_shader(lut),
+                    shader_controls={"normalized": {"range": zm["ranges"][ch]},
+                                     "color": LUTS[lut][2]},
+                    blend="default" if ci == 0 else "additive")
+        if zooms:
+            s.position = zooms[0][0].center
         s.layers["boundaries"] = neuroglancer.ImageLayer(
             source=f"{src}/boundaries",
             shader="void main() { float v = float(toRaw(getDataValue()));"
@@ -888,6 +1898,24 @@ def open_viewer(out: Path, meta: dict, port: int, layout: str, browser: bool):
             s.selected_layer.layer = first
             s.selected_layer.visible = True
         s.layout = layout
+        if zooms and layout == "4panel":
+            # 4th panel (where the 3D view usually is): an xy view zoomed on the first
+            # ROI, showing it at native resolution with the atlas outlines / labels,
+            # without the region meshes. Position is shared, zoom level is its own.
+            all_layers = [layer.name for layer in s.layers]
+            roi_layers = [n for n in all_layers if n != "region meshes"]
+            ex, ey, _ = zooms[0][0].extent
+            fit = max(ex, ey) * 1.1 / 700  # viewer voxels per screen pixel (~700 px panel)
+
+            def panel(kind, names, **kw):
+                return neuroglancer.LayerGroupViewer(layers=names, layout=kind, **kw)
+
+            roi_panel = panel("xy", roi_layers, cross_section_scale=neuroglancer.LinkedZoomFactor(
+                link="unlinked", value=fit))
+            s.layout = neuroglancer.row_layout([
+                neuroglancer.column_layout([panel("xy", all_layers), roi_panel]),
+                neuroglancer.column_layout([panel("xz", all_layers), panel("yz", all_layers)]),
+            ])
 
     # Selection panel (right) open: it lists every statistic of the region under the
     # mouse. Double-click pins it there, for that region at every hierarchy level.
@@ -898,6 +1926,9 @@ def open_viewer(out: Path, meta: dict, port: int, layout: str, browser: bool):
     seg_names = level_names + [ex["name"] for ex in meta["extra"]]
     if meta["meshes"]:
         seg_names.append("region meshes")  # hit in the 3D view
+    app = ViewerApp(viewer, meta, list(initial_luts), level_names, seg_names)
+    app.luts = {n: {"lut": lut, "invert": False} for n, lut in initial_luts.items()}
+    app.index = RegionIndex(out, meta)
 
     def select_and_pin(action):
         hits = {}
@@ -929,54 +1960,75 @@ def open_viewer(out: Path, meta: dict, port: int, layout: str, browser: bool):
                         msegs.discard(seg)
             pinned = dict(hits)
             for name, seg in hits.items():
-                if name in level_names:
-                    levels = [level_names.index(name)]
-                elif name == "region meshes":
-                    levels = range(len(level_names))
-                else:
-                    continue
-                for k in levels:
-                    row = next((r for r in meta["hierarchy"] if r[k] == seg), None)
-                    if row is not None:
-                        for j in range(k, len(level_names)):
-                            if row[j]:
-                                pinned.setdefault(level_names[j], row[j])
-                        break
-            order = {n: i for i, n in enumerate(seg_names)}
-            s._json_data["selection"] = {
-                "position": [float(x) for x in action.mouse_voxel_coordinates],
-                "layers": {n: {"value": str(pinned[n])}
-                           for n in sorted(pinned, key=order.get)},
-            }
+                for k, v in app.pins_for(name, seg).items():
+                    pinned.setdefault(k, v)
+            s._json_data["selection"] = app._selection(pinned, action.mouse_voxel_coordinates)
 
     viewer.actions.add("lightsuite-select-and-pin", select_and_pin)
     with viewer.config_state.txn() as c:
         c.input_event_bindings.data_view["dblclick0"] = "lightsuite-select-and-pin"
 
-    url = viewer.get_viewer_url()
+    ng_url = viewer.get_viewer_url()
+    app.viewer_url = ng_url
+    app_ref["app"] = app
+    url = f"{base}/lightsuite/"
     print(f"\nSample: {meta['sample']}  ({meta['results']})")
-    print("Neuroglancer viewer:", url)
+    print("Viewer (with region search and channel LUTs):", url)
+    print("Plain Neuroglancer:", ng_url)
+    if not meta.get("centers"):
+        print("  (region centres missing: search highlights regions but cannot jump to them;"
+              " run with --reexport)")
     print("Press Ctrl+C to stop.")
     if browser:
         webbrowser.open(url)
+    stop = threading.Event()
     try:
-        threading.Event().wait()
+        while not stop.wait(0.5):  # short waits so Ctrl+C also works on Windows
+            pass
     except KeyboardInterrupt:
+        print("Stopping.")
         server.shutdown()
+
+
+def _writable(d: Path) -> bool:
+    """Real write test (os.access is unreliable for folders on Windows / network shares)."""
+    if (d / "neuroglancer").is_dir():
+        d = d / "neuroglancer"
+    probe = d / f".lightsuite_write_test_{os.getpid()}"
+    try:
+        probe.write_bytes(b"")
+        probe.unlink()
+        return True
+    except OSError:
+        return False
+
+
+def cache_root() -> Path:
+    if sys.platform == "win32" and os.environ.get("LOCALAPPDATA"):
+        return Path(os.environ["LOCALAPPDATA"]) / "lightsuite-neuroglancer"
+    xdg = os.environ.get("XDG_CACHE_HOME")
+    return (Path(xdg) if xdg else Path.home() / ".cache") / "lightsuite-neuroglancer"
 
 
 def output_dir(sample: Sample, out_arg: str | None) -> Path:
     if out_arg:
         return Path(out_arg).expanduser()
     out = sample.root / "neuroglancer"
-    if os.access(sample.root, os.W_OK):
+    if _writable(sample.root):
         return out
     tag = hashlib.sha1(str(sample.root).encode()).hexdigest()[:8]
-    return Path.home() / ".cache" / "lightsuite-neuroglancer" / f"{sample.name}-{tag}"
+    return cache_root() / f"{sample.name}-{tag}"
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    for stream in (sys.stdout, sys.stderr):
+        try:  # live progress when piped, and no crash on non-UTF-8 Windows consoles
+            stream.reconfigure(line_buffering=True, errors="replace")
+        except (AttributeError, ValueError):
+            pass
+    ap = argparse.ArgumentParser(prog="lightsuite-neuroglancer",
+                                 description=__doc__.split("\n")[0])
+    ap.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     ap.add_argument("folder", nargs="?", help="LightSuite registration results folder")
     ap.add_argument("--atlas-dir", help="folder with the atlas ontology CSV "
                                         "(default: from the config yaml / ~/atlases)")
@@ -984,8 +2036,13 @@ def main():
                                   "(default: <results>/neuroglancer)")
     ap.add_argument("--reexport", action="store_true", help="force re-conversion")
     ap.add_argument("--no-meshes", action="store_true", help="skip 3D region meshes")
+    ap.add_argument("--zoom", action="append", default=[], metavar="MULTIRES_DIR",
+                    help="LightSuite multires results folder (multires_regopts.json): show its "
+                         "raw ROI stacks at native resolution, placed with the saved "
+                         "ROI-to-overview transforms (repeatable)")
     ap.add_argument("--port", type=int, default=0, help="data server port (default: any free)")
-    ap.add_argument("--layout", default="4panel", help="4panel, xy, yz, xz or 3d")
+    ap.add_argument("--layout", default="4panel", help="4panel, xy, yz, xz or 3d (4panel with --zoom: the 3D panel is replaced "
+                         "by an xy view zoomed on the ROI, with the atlas labels)")
     ap.add_argument("--no-browser", action="store_true")
     args = ap.parse_args()
 
@@ -1000,9 +2057,19 @@ def main():
         meta_path.write_text(json.dumps(meta))
     else:
         print(f"Using cached conversion in {out}")
-    open_viewer(out, meta, args.port, args.layout, not args.no_browser)
+    zooms = []
+    if args.zoom:
+        atlas_info = json.loads((out / meta["levels"][0]["dir"] / "info").read_text()) \
+            if meta.get("levels") else json.loads((out / "boundaries" / "info").read_text())
+        for z in args.zoom:
+            zoom = Zoom(Path(z), sample, atlas_info)
+            if any(zoom.tag == other.tag for other, _ in zooms):
+                zoom.tag = f"{zoom.tag}_{len(zooms) + 1}"
+            zooms.append((zoom, prepare_zoom(zoom, args.out, args.reexport)))
+            c = ", ".join(f"{v:.1f}" for v in zoom.center)
+            print(f"  zoom '{zoom.tag}' ({', '.join(zoom.channels)}) centred at viewer voxel ({c})")
+    open_viewer(out, meta, args.port, args.layout, not args.no_browser, zooms)
 
 
 if __name__ == "__main__":
-    sys.stdout.reconfigure(line_buffering=True)
     main()

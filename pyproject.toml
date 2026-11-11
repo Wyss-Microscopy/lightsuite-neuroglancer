@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lightsuite-neuroglancer"
+version = "0.2.0"
+description = "Open LightSuite atlas-registration results in Neuroglancer"
+readme = "README.md"
+requires-python = ">=3.10"
+# Keep in sync with the "# /// script" header of view_in_neuroglancer.py
+dependencies = [
+    "neuroglancer",
+    "tifffile",
+    "imagecodecs",
+    "numpy",
+    "pandas",
+    "scipy",
+    "scikit-image",
+    "pyyaml",
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+]
+
+[project.scripts]
+lightsuite-neuroglancer = "view_in_neuroglancer:main"
+view-in-neuroglancer = "view_in_neuroglancer:main"
+
+[tool.setuptools]
+py-modules = ["view_in_neuroglancer"]

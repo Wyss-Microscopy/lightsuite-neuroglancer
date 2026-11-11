@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LightSuite Neuroglancer Guide</title>
+<style>
+  :root {
+    --bg: #fbfbfa; --fg: #1d1f21; --muted: #5d6166; --line: #e2e3e0;
+    --card: #ffffff; --code-bg: #f1f2ef; --accent: #2f6f8f; --warn-bg: #fff6e0; --warn-line: #e3b54a;
+    --tip-bg: #eaf4f8; --tip-line: #7fb2c9;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #17191b; --fg: #e4e5e3; --muted: #9da1a6; --line: #2e3134;
+      --card: #1e2124; --code-bg: #25292c; --accent: #7cc0e0; --warn-bg: #2d2717; --warn-line: #a27f2c;
+      --tip-bg: #18262d; --tip-line: #3d6d82;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #17191b; --fg: #e4e5e3; --muted: #9da1a6; --line: #2e3134;
+    --card: #1e2124; --code-bg: #25292c; --accent: #7cc0e0; --warn-bg: #2d2717; --warn-line: #a27f2c;
+    --tip-bg: #18262d; --tip-line: #3d6d82;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 32px 16px 80px; }
+  header { border-bottom: 1px solid var(--line); margin-bottom: 24px; padding-bottom: 16px; }
+  h1 { font-size: 1.9rem; margin: 0 0 4px; letter-spacing: -0.01em; }
+  .lede { color: var(--muted); margin: 0; }
+  h2 { font-size: 1.35rem; margin: 44px 0 12px; padding-top: 8px; border-top: 1px solid var(--line); }
+  h3 { font-size: 1.05rem; margin: 26px 0 8px; }
+  a { color: var(--accent); }
+  nav.toc { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 12px 18px; }
+  nav.toc ol { margin: 4px 0; padding-left: 20px; columns: 2; column-gap: 32px; }
+  @media (max-width: 600px) { nav.toc ol { columns: 1; } }
+  code { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 0.9em;
+         background: var(--code-bg); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+  pre { background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px;
+        padding: 12px 14px; overflow-x: auto; line-height: 1.45; }
+  pre code { background: none; padding: 0; font-size: 0.88em; overflow-wrap: normal; }
+  .label { display: inline-block; font-size: 0.75rem; font-weight: 600; text-transform: uppercase;
+           letter-spacing: 0.05em; color: var(--muted); margin: 10px 0 -4px; }
+  table { border-collapse: collapse; width: 100%; margin: 10px 0; display: block; overflow-x: auto; }
+  th, td { text-align: left; vertical-align: top; padding: 7px 10px; border-bottom: 1px solid var(--line); }
+  th { font-weight: 600; }
+  td:first-child { white-space: nowrap; }
+  .note, .warn { border-left: 4px solid; border-radius: 6px; padding: 10px 14px; margin: 14px 0; }
+  .note { background: var(--tip-bg); border-color: var(--tip-line); }
+  .warn { background: var(--warn-bg); border-color: var(--warn-line); }
+  .note p, .warn p { margin: 4px 0; }
+  .choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin: 14px 0; }
+  .choice { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
+  .choice h4 { margin: 0 0 4px; font-size: 1rem; }
+  .choice p { margin: 0; color: var(--muted); font-size: 0.93rem; }
+  ol.steps > li { margin-bottom: 10px; }
+  footer { margin-top: 56px; color: var(--muted); font-size: 0.88rem; border-top: 1px solid var(--line); padding-top: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>LightSuite Neuroglancer</h1>
+  <p class="lede">Installation and usage guide: view LightSuite atlas-registration results
+  (sample channels, warped atlas, region names, statistics and 3D meshes) in
+  Neuroglancer on Windows, Linux or macOS.</p>
+</header>
+
+<nav class="toc" aria-label="Contents">
+  <strong>Contents</strong>
+  <ol>
+    <li><a href="#requirements">Requirements</a></li>
+    <li><a href="#install-uv">Install uv (once per PC)</a></li>
+    <li><a href="#install">Get the tool</a></li>
+    <li><a href="#run">Open a dataset</a></li>
+    <li><a href="#options">Command-line options</a></li>
+    <li><a href="#viewer">Using the viewer</a></li>
+    <li><a href="#atlas">Region names and atlases</a></li>
+    <li><a href="#zoom">Zoom stacks</a></li>
+    <li><a href="#data">Moved data and storage</a></li>
+    <li><a href="#trouble">Troubleshooting</a></li>
+    <li><a href="#update">Updating and uninstalling</a></li>
+  </ol>
+</nav>
+
+<h2 id="requirements">1. Requirements</h2>
+<ul>
+  <li><strong>Windows 10/11, Linux or macOS.</strong> No administrator rights needed.</li>
+  <li><strong>uv</strong>, a small Python manager. It downloads Python 3.10+ and all
+      dependencies by itself, so you do not need Python, conda or pip.</li>
+  <li><strong>Internet</strong> on the first run only, to download the dependencies (about 150 MB).</li>
+  <li>A browser with <strong>WebGL 2</strong>: a recent Chrome, Edge or Firefox.</li>
+  <li><strong>3&ndash;4 GB free disk per brain</strong> for the converted data, and
+      <strong>8 GB+ RAM</strong> for the first conversion of a 20&nbsp;&micro;m brain.</li>
+</ul>
+
+<h2 id="install-uv">2. Install uv (once per PC)</h2>
+<p class="label">Windows (PowerShell)</p>
+<pre><code>powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"</code></pre>
+<p class="label">Linux / macOS</p>
+<pre><code>curl -LsSf https://astral.sh/uv/install.sh | sh</code></pre>
+<p>Then <strong>close and reopen the terminal</strong> and check it with <code>uv --version</code>.</p>
+<div class="note"><p>If you can't use the installer (e.g. company policy), <code>pip install uv</code>
+or <code>conda install -c conda-forge uv</code> also work. You can also skip uv and use pip directly,
+see option C below.</p></div>
+
+<h2 id="install">3. Get the tool</h2>
+<p>Choose <strong>one</strong> of the following options:</p>
+<div class="choices">
+  <div class="choice"><h4>A. Run from the folder</h4><p>No installation. Best if you might edit the code.</p></div>
+  <div class="choice"><h4>B. Install as a command</h4><p>Adds <code>lightsuite-neuroglancer</code> to your PATH. Run it from any folder.</p></div>
+  <div class="choice"><h4>C. pip / conda env</h4><p>Install into an existing Python environment.</p></div>
+</div>
+
+<h3>A. Run from the folder (no install)</h3>
+<p>Download the code with git, or download the ZIP from GitHub and extract it, for example to <code>D:\LIGHTSUITE\lightsuite-neuroglancer</code>:</p>
+<pre><code>git clone https://github.com/YCabara/lightsuite_neuroglancer.git D:\LIGHTSUITE\lightsuite-neuroglancer
+cd D:\LIGHTSUITE\lightsuite-neuroglancer
+uv run view_in_neuroglancer.py</code></pre>
+<p>On Windows you can also just <strong>double-click <code>run_viewer.bat</code></strong> (a folder
+picker opens), or <strong>drag a results folder onto it</strong>.</p>
+
+<h3>B. Install as a command (recommended for regular users)</h3>
+<pre><code># from GitHub
+uv tool install git+https://github.com/YCabara/lightsuite_neuroglancer.git
+
+# or from a local copy of the folder
+uv tool install D:\LIGHTSUITE\lightsuite-neuroglancer</code></pre>
+<p>Then, from any terminal:</p>
+<pre><code>lightsuite-neuroglancer D:\brain8_analysed\8_DNF_atlased</code></pre>
+<p>If the command is not found, run <code>uv tool update-shell</code> once and reopen the terminal.</p>
+
+<h3>C. Into a pip or conda environment</h3>
+<pre><code>conda create -n lsng python=3.12 -y
+conda activate lsng
+pip install D:\LIGHTSUITE\lightsuite-neuroglancer      # or: pip install git+https://github.com/YCabara/lightsuite_neuroglancer.git
+lightsuite-neuroglancer --version</code></pre>
+
+<h2 id="run">4. Open a dataset</h2>
+<p>Pass the registration output folder. This is the folder that contains
+<code>volume_registered\sample_space\sample_space_manifest.json</code>, or any folder
+above it. If several results are found under it, you are asked to choose one.</p>
+<pre><code>lightsuite-neuroglancer D:\brain8_analysed\8_DNF_atlased
+:: or, without installing (option A):
+uv run view_in_neuroglancer.py D:\brain8_analysed\8_DNF_atlased</code></pre>
+<p>Without a folder, a folder picker opens.</p>
+<ol class="steps">
+  <li><strong>First run:</strong> the data is converted to Neuroglancer format in
+      <code>&lt;results&gt;\neuroglancer\</code>. This takes a few minutes, mostly building
+      3D meshes (use <code>--no-meshes</code> to skip them). Expect output like:
+<pre><code>Converting D:\brain8_analysed\8_DNF_atlased -&gt; D:\brain8_analysed\8_DNF_atlased\neuroglancer
+  grid (331, 671, 671) (x,y,z), voxel [20.0, 20.0, 20.0] um, channels ['ch1', 'ch2']
+  region names from: sample stats/region_stats.csv
+  level 'regions': 615 regions
+  ...
+  building region meshes (949 regions) ...
+  region centres (for search) ...
+Viewer (with region search and channel LUTs): http://127.0.0.1:50893/lightsuite/
+Plain Neuroglancer: http://127.0.0.1:50894/v/5f41.../
+Press Ctrl+C to stop.</code></pre></li>
+  <li><strong>The browser opens</strong> on the viewer, with the <a href="#viewer">side panel</a> for region search and channel LUTs. <strong>Keep the terminal open</strong> while you use it, because it serves the data.</li>
+  <li><strong>Stop</strong> with <kbd>Ctrl</kbd>+<kbd>C</kbd> in the terminal (or close the window).</li>
+  <li><strong>Later runs</strong> reuse the converted data and start in seconds. It is rebuilt automatically when the registration files or the tool change. Use <code>--reexport</code> to force a rebuild.</li>
+</ol>
+
+<h2 id="options">5. Command-line options</h2>
+<table>
+  <tr><th>Option</th><th>Effect</th></tr>
+  <tr><td><code>FOLDER</code></td><td>Results folder (or a parent). Omit it to get a folder picker.</td></tr>
+  <tr><td><code>--atlas-dir DIR</code></td><td>Folder with the atlas ontology CSV, if it is not found automatically.</td></tr>
+  <tr><td><code>--out DIR</code></td><td>Write the converted data to <code>DIR</code> instead of <code>&lt;results&gt;\neuroglancer</code>.</td></tr>
+  <tr><td><code>--no-meshes</code></td><td>Skip 3D region meshes (much faster conversion).</td></tr>
+  <tr><td><code>--zoom DIR</code></td><td>Also show a LightSuite multires ROI at native resolution. Can be given several times.</td></tr>
+  <tr><td><code>--reexport</code></td><td>Force re-conversion of atlas and zoom data.</td></tr>
+  <tr><td><code>--layout L</code></td><td>Start layout: <code>4panel</code> (default), <code>xy</code>, <code>yz</code>, <code>xz</code>, <code>3d</code>.</td></tr>
+  <tr><td><code>--port N</code></td><td>Port of the local data server (default: any free port).</td></tr>
+  <tr><td><code>--no-browser</code></td><td>Only print the URL, for example to open it in another browser.</td></tr>
+  <tr><td><code>--version</code></td><td>Print the version.</td></tr>
+</table>
+
+<h2 id="viewer">6. Using the viewer</h2>
+<h3>Layers</h3>
+<table>
+  <tr><th>Layer</th><th>Content</th></tr>
+  <tr><td><code>ch1</code>, <code>ch2</code>, &hellip;</td><td>Sample channels on the registration grid (ch2+ hidden and coloured).</td></tr>
+  <tr><td><code>template</code></td><td>Atlas template warped onto the sample (hidden).</td></tr>
+  <tr><td><code>boundaries</code></td><td>Atlas region outlines.</td></tr>
+  <tr><td>hierarchy levels</td><td>One layer per level, e.g. <code>regions</code>, <code>structure</code>, <code>division</code>.</td></tr>
+  <tr><td>extra labels</td><td>E.g. <code>division_labels</code>, spinal-cord <code>segments</code> (hidden).</td></tr>
+  <tr><td><code>region meshes</code></td><td>3D surface of every region at every level.</td></tr>
+</table>
+<h3>Side panel: find a region</h3>
+<p>The browser opens on <code>http://127.0.0.1:&lt;port&gt;/lightsuite/</code>, which is Neuroglancer with a panel on the left
+(hide it with <strong>&lsaquo;</strong>, bring it back with the tab on the left edge). The terminal also prints the plain Neuroglancer URL.</p>
+<ol class="steps">
+  <li>Type a region name, acronym or ID in <strong>Find a region</strong>, for example <code>locus coeruleus</code>, <code>CA1</code>, <code>substantia nigra</code> or <code>147</code>.
+      Matching ignores case and accents. It also accepts British spellings (<em>coeruleus</em> finds the atlas's <em>Locus ceruleus</em>) and small typos. Weaker matches are labelled &ldquo;similar&rdquo;.</li>
+  <li>Press <kbd>Enter</kbd> for the first match, or use <kbd>&uarr;</kbd><kbd>&darr;</kbd> and <kbd>Enter</kbd>, or click a result. This happens:
+    <ul>
+      <li>only that region is shown, highlighted on its hierarchy level layer;</li>
+      <li>the view jumps to the region and zooms to fit it;</li>
+      <li>its 3D mesh is shown in <code>region meshes</code>;</li>
+      <li>its statistics, and those of the regions that contain it, are pinned in the <em>Selection</em> panel.</li>
+    </ul></li>
+  <li><kbd>Shift</kbd>+click (or <kbd>Shift</kbd>+<kbd>Enter</kbd>) <strong>adds</strong> a region to the highlight, e.g. LC and the subceruleus nucleus together.</li>
+  <li><strong>Show all regions</strong> restores the view as it was before the search. <kbd>Esc</kbd> clears the search box.</li>
+</ol>
+
+<h3>Side panel: channel LUTs</h3>
+<p>Each channel, including zoom-stack channels, has:</p>
+<ul>
+  <li>a <strong>visibility</strong> checkbox;</li>
+  <li>a <strong>LUT</strong> menu with a preview bar:
+    <table>
+      <tr><th>LUT</th><th>Use</th></tr>
+      <tr><td>Grays, Green, Red, Blue, Magenta, Cyan, Yellow</td><td>black &rarr; colour, as in ImageJ / Fiji; good for overlaying channels</td></tr>
+      <tr><td>Fire (hot), Inferno, Magma, Plasma, Viridis</td><td>perceptually ordered maps to show intensity differences in one channel</td></tr>
+      <tr><td>Turbo, Jet</td><td>rainbow maps with high contrast (not perceptually uniform)</td></tr>
+      <tr><td>HiLo</td><td>grey, with pixels at or below the range minimum in <span style="color:#4a7dff">blue</span> and at or above the maximum in <span style="color:#e05050">red</span>, to check saturation or clipping while setting contrast</td></tr>
+    </table></li>
+  <li><strong>invert</strong>, which flips the LUT.</li>
+</ul>
+<p>Changing the LUT keeps the <strong>contrast range</strong>. You set the range in Neuroglancer: click the channel's layer tab, then <em>Rendering</em>, then drag the range slider or the histogram.
+Channels 2+ are blended <em>additively</em>, so with e.g. ch1 = Magenta and ch2 = Green, overlap shows white.</p>
+
+<h3>Mouse and keyboard</h3>
+<ul>
+  <li><strong>Hover</strong> to see the region name at every level. The <em>Selection</em> panel (bottom right) shows all statistics of the region under the mouse.</li>
+  <li><strong>Double-click a region</strong> to show only that region, add its 3D mesh, and pin its statistics (and those of the regions containing it). Double-click it again to show all regions. Double-click the background to unpin.</li>
+  <li><kbd>Ctrl</kbd>+right-click pins a region without isolating it.</li>
+  <li>In a layer's <strong>Seg.</strong> tab, search by acronym, name, ID or <code>#tag</code> (e.g. <code>#Isocortex</code>). Per-region statistics appear under &ldquo;numerical properties&rdquo;, where you can add them as columns and sort or filter by them.</li>
+  <li>Standard Neuroglancer: scroll to change slice, <kbd>Ctrl</kbd>+scroll to zoom, drag to pan, and <kbd>H</kbd> for all shortcuts.</li>
+</ul>
+
+<h2 id="atlas">7. Region names and atlases</h2>
+<p>Region names and the hierarchy are taken from the first source found, in this order:</p>
+<ol>
+  <li>Spinal-cord (Fiederling) atlas: <code>Atlas_Regions.csv</code> next to the manifest's <code>segments_csv</code>.</li>
+  <li>Allen CCF: <code>parcellation_to_parcellation_term_membership.csv</code> in the config's <code>atlas.atlas_dir</code>, in <code>--atlas-dir</code>, or in <code>~/atlases/*</code>.</li>
+  <li>A downloaded <strong>BrainGlobe</strong> atlas (<code>structures.json</code>) in <code>%BRAINGLOBE_DIR%</code>, <code>~/.brainglobe</code> or other users' <code>.brainglobe</code> folders (<code>C:\Users\*</code>, <code>/home/*</code>), matched by the config's <code>brainglobe_name</code>.</li>
+  <li>The sample's own <code>stats/region_stats.csv</code> (region / structure / division).</li>
+  <li>Bare label numbers.</li>
+</ol>
+<div class="note">
+<p><strong>Better names for BrainGlobe-registered brains</strong> (e.g. Perens LSFM). Download the atlas once on the PC to get full names, colours and the complete hierarchy:</p>
+<pre><code>uvx --from brainglobe-atlasapi brainglobe install -a perens_lsfm_mouse_20um</code></pre>
+<p>Use the name in the sample's <code>config_*.yaml</code> under <code>atlas.brainglobe_name</code>. The next run detects the change and converts again.</p>
+</div>
+
+<h2 id="zoom">8. Zoom stacks</h2>
+<pre><code>lightsuite-neuroglancer D:\data\brain_atlased --zoom D:\data\brain_multires_results</code></pre>
+<p><code>--zoom</code> takes a LightSuite multires results folder (the one with
+<code>multires_regopts.json</code>). Each ROI channel becomes a layer at native resolution.
+The ROIs are placed with the transforms the multires run already saved, so nothing is
+registered again. Converted zoom data goes to <code>&lt;multires_results&gt;\neuroglancer\</code>
+(about 1.15&times; the raw TIFF size). B-spline elastix stages are not supported. See the
+README for details.</p>
+
+<h2 id="data">9. Moved data, other PCs and storage</h2>
+<ul>
+  <li><strong>Results moved from Linux to Windows (or another drive):</strong> the manifest
+      stores absolute paths such as <code>/media/gbm/NVME2/&hellip;</code>. If a path does not exist, the tool looks
+      for the same file name inside the results folder and in <code>volume_registered\sample_space</code>.
+      Copying the whole results folder is enough.</li>
+  <li><strong>Read-only results folder</strong> (e.g. a protected network share): the converted data goes to
+      <code>%LOCALAPPDATA%\lightsuite-neuroglancer\</code> on Windows or <code>~/.cache/lightsuite-neuroglancer/</code>
+      on Linux/macOS. You can also set it with <code>--out</code>.</li>
+  <li><strong>Network drives</strong> work but the first conversion is slower. Copying the results to a local disk first is faster.</li>
+  <li>The <code>neuroglancer</code> folder can be deleted at any time and is rebuilt on the next run.</li>
+</ul>
+
+<h2 id="trouble">10. Troubleshooting</h2>
+<table>
+  <tr><th>Problem</th><th>Fix</th></tr>
+  <tr><td><code>uv</code> not recognized</td><td>Reopen the terminal after installing uv. On Windows, check that <code>%USERPROFILE%\.local\bin</code> is in PATH.</td></tr>
+  <tr><td><code>lightsuite-neuroglancer</code> not recognized</td><td>Run <code>uv tool update-shell</code> and reopen the terminal, or use option A.</td></tr>
+  <tr><td>&ldquo;No LightSuite results found&rdquo;</td><td>The folder (or the 4 levels below it) has no <code>volume_registered\sample_space\sample_space_manifest.json</code>.</td></tr>
+  <tr><td>&ldquo;Annotation volume &hellip; not found&rdquo;</td><td>The TIFFs listed in the manifest are not in the results folder. Copy them back next to the manifest.</td></tr>
+  <tr><td>Region names are only numbers or short</td><td>No atlas ontology was found. Install the BrainGlobe atlas (section 7) or pass <code>--atlas-dir</code>.</td></tr>
+  <tr><td>Blank / black viewer</td><td>The browser has no WebGL 2. Use recent Chrome or Edge with hardware acceleration enabled.</td></tr>
+  <tr><td>Viewer stops loading data</td><td>The terminal was closed. Run the command again (it starts in seconds).</td></tr>
+  <tr><td>Conversion runs out of memory</td><td>Close other programs, or use <code>--no-meshes</code>.</td></tr>
+  <tr><td>Behind a proxy (first run)</td><td>Set <code>HTTPS_PROXY</code> before running so uv can download the packages.</td></tr>
+</table>
+<div class="warn"><p>The viewer is served only on <code>127.0.0.1</code> (this PC). Other computers cannot open
+the URL. To view a dataset on another PC, install the tool there.</p></div>
+
+<h2 id="update">11. Updating and uninstalling</h2>
+<table>
+  <tr><th>Install type</th><th>Update</th><th>Uninstall</th></tr>
+  <tr><td>A. folder</td><td><code>git pull</code></td><td>delete the folder</td></tr>
+  <tr><td>B. uv tool</td><td><code>uv tool upgrade lightsuite-neuroglancer</code><br>(local copy: <code>uv tool install --reinstall &lt;folder&gt;</code>)</td><td><code>uv tool uninstall lightsuite-neuroglancer</code></td></tr>
+  <tr><td>C. pip</td><td><code>pip install -U &lt;folder or git URL&gt;</code></td><td><code>pip uninstall lightsuite-neuroglancer</code></td></tr>
+</table>
+<p>Converted data is reconverted automatically after an update, because the tool's code is part of the cache key.</p>
+
+<footer>lightsuite-neuroglancer 0.2.0 &middot; <a href="https://github.com/YCabara/lightsuite_neuroglancer">GitHub</a> &middot; <a href="https://github.com/google/neuroglancer">Neuroglancer</a></footer>
+</div>
+</body>
+</html>

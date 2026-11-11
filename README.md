@@ -8,15 +8,26 @@ the atlas hierarchy, per-region statistics and 3D region meshes.
 
 Needs [uv](https://docs.astral.sh/uv/) (Linux, Windows or macOS). Python and the
 dependencies are downloaded automatically on first run (internet needed once).
-Only Linux has been tested. Also needed: a browser with WebGL 2 (recent
+Tested on Linux and Windows 11. Also needed: a browser with WebGL 2 (recent
 Chrome, Firefox or Edge), 3–4 GB free disk per brain, and probably 8 GB or more
 of RAM for the first conversion of a 20 µm brain.
 
 ```bash
-cd /home/yosi/lightsuite-neuroglancer
+cd lightsuite-neuroglancer
 uv run view_in_neuroglancer.py                       # opens a folder picker
 uv run view_in_neuroglancer.py /path/to/results       # or give the folder
 ```
+
+Or install it as a command (works on Windows, Linux and macOS):
+
+```bash
+uv tool install git+https://github.com/YCabara/lightsuite_neuroglancer.git
+lightsuite-neuroglancer D:\brain8_analysed\8_DNF_atlased
+```
+
+`pip install .` into any Python ≥3.10 environment also works. On Windows you can
+double-click `run_viewer.bat` (or drop a results folder on it). Full
+installation and usage guide: [docs/installation.html](docs/installation.html).
 
 The folder can be the registration output itself (the one containing
 `volume_registered/sample_space/sample_space_manifest.json`) or any folder
@@ -35,7 +46,8 @@ Options:
 | `--atlas-dir DIR` | folder with the atlas ontology CSV if it is not found automatically |
 | `--out DIR` | write the converted data somewhere else |
 | `--no-meshes` | skip 3D meshes (much faster conversion) |
-| `--reexport` | force re-conversion |
+| `--zoom DIR` | also show a LightSuite multires ROI (e.g. a 3.2x stack) at native resolution, see [Zoom stacks](#zoom-stacks); repeatable |
+| `--reexport` | force re-conversion (atlas and zoom data) |
 | `--layout 3d` | start layout: `4panel` (default), `xy`, `yz`, `xz`, `3d` |
 | `--port N` | port of the local data server (default: any free port) |
 | `--no-browser` | only print the URL |
@@ -63,6 +75,27 @@ Options:
   Click a region to highlight it. In `region meshes` this shows its 3D surface.
 * Per-region statistics also show under "numerical properties" in the Seg.
   tab, where you can add them as columns, and sort and filter by them.
+
+### Side panel: region search and channel LUTs
+
+The browser opens on `http://127.0.0.1:<port>/lightsuite/`: Neuroglancer with a
+panel on the left (hide it with ‹). The plain Neuroglancer URL is printed too.
+
+* **Find a region**: type a name, acronym or ID, e.g. `locus coeruleus`, `CA1`,
+  `147`. Matching is forgiving: case, accents, British spellings
+  (coeruleus = ceruleus) and small typos are tolerated; weaker matches are marked
+  "similar". **Enter** (or a click) shows the first / chosen match: that region
+  alone is highlighted on its hierarchy level, the view jumps to it and zooms to
+  fit it, its 3D mesh is shown and its statistics (and those of the regions
+  containing it) are pinned in the Selection panel. **Shift+click** /
+  **Shift+Enter** adds a region to the highlight. **Show all regions** restores
+  the previous view.
+* **Channels**: per channel (and per zoom-stack channel) a visibility checkbox,
+  a LUT — Grays, Green, Red, Blue, Magenta, Cyan, Yellow, Fire, Inferno, Magma,
+  Plasma, Viridis, Turbo, Jet, HiLo (blue = at/below the range minimum,
+  red = at/above the maximum, to check saturation) — and **invert**. Changing the
+  LUT keeps the contrast range set in the layer's Rendering tab. Channels 2+ are
+  blended additively, so several channels can be shown together.
 
 ## Where region names come from
 
@@ -102,3 +135,37 @@ Volumes are shown on the pipeline's registration grid, the same way
 LightSuite's own QC overlays show them. Channels get
 `permute_sample_to_atlas` applied. Atlas volumes get it too, unless the manifest
 says `atlas_volumes_permuted: true`.
+
+## Zoom stacks
+
+```bash
+uv run view_in_neuroglancer.py /path/to/atlased --zoom /path/to/multires_results
+```
+
+`--zoom` takes a LightSuite multires results folder (the one with
+`multires_regopts.json`). Each ROI channel of its pair manifest gets a layer,
+e.g. `greencells 488` and `greencells 561`, placed over the whole brain and below
+the atlas outlines and labels. The view starts centred on the first zoom. With the default 4panel layout the 3D panel is replaced by an xy view zoomed on
+the (first) ROI: the zoom at native resolution with the atlas outlines and labels,
+no region meshes. It follows the shared position but keeps its own zoom level.
+
+* **Nothing is registered or resampled again.** The raw ROI TIFFs (the
+  `roi.volume_path` of each channel) are converted as they are into a
+  multiscale precomputed volume. `s0` is the native voxel size (e.g.
+  2.03 x 2.03 x 3 µm), and each further level halves it. LightSuite's resampled
+  `*_registered_to_*.tif` files are not used.
+* **They are placed with one affine** built from parameters the multires run
+  already saved: the voxel size, stage position and orientation in the pair manifest
+  (`converted/*_pair.json`), the landmark fit `roi_to_overview_tform` in
+  `multires_regopts.json`, and the elastix `TransformParameters.*.txt` chain
+  (Translation / Euler / Affine). These are followed by the atlas run's
+  registration-grid downsampling (`regopts.json`) and `permute_sample_to_atlas`.
+  Neuroglancer applies the matrix when it draws the layer.
+  A B-spline elastix stage is refused, because it cannot be shown as one matrix.
+* The multires overview stack must be the stack the atlas registration used
+  (same size and voxel size), otherwise the tool stops.
+* Converted data goes to `<multires_results>/neuroglancer/` (about 1.15x the
+  raw TIFF size, uncompressed) and is reused until the TIFFs change. The
+  matrix is recomputed at every start and also written to `zoom_meta.json`.
+* The atlas labels are still on their 20 µm grid, so region edges look blocky when
+  you are zoomed in on the stack.
