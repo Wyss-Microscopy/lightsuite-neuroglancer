@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LightSuite Neuroglancer Troubleshooting</title>
+<style>
+  :root {
+    --bg: #fbfbfa; --fg: #1d1f21; --muted: #5d6166; --line: #e2e3e0;
+    --card: #ffffff; --code-bg: #f1f2ef; --accent: #2f6f8f; --warn-bg: #fff6e0; --warn-line: #e3b54a;
+    --tip-bg: #eaf4f8; --tip-line: #7fb2c9; --ok: #2e7d4f; --bad: #b3261e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #17191b; --fg: #e4e5e3; --muted: #9da1a6; --line: #2e3134;
+      --card: #1e2124; --code-bg: #25292c; --accent: #7cc0e0; --warn-bg: #2d2717; --warn-line: #a27f2c;
+      --tip-bg: #18262d; --tip-line: #3d6d82; --ok: #6fcf97; --bad: #f28b82;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #17191b; --fg: #e4e5e3; --muted: #9da1a6; --line: #2e3134;
+    --card: #1e2124; --code-bg: #25292c; --accent: #7cc0e0; --warn-bg: #2d2717; --warn-line: #a27f2c;
+    --tip-bg: #18262d; --tip-line: #3d6d82; --ok: #6fcf97; --bad: #f28b82;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 32px 16px 80px; }
+  header { border-bottom: 1px solid var(--line); margin-bottom: 24px; padding-bottom: 16px; }
+  h1 { font-size: 1.9rem; margin: 0 0 4px; letter-spacing: -0.01em; }
+  .lede { color: var(--muted); margin: 0; }
+  h2 { font-size: 1.35rem; margin: 44px 0 12px; padding-top: 8px; border-top: 1px solid var(--line); }
+  h3 { font-size: 1.05rem; margin: 26px 0 8px; }
+  a { color: var(--accent); }
+  nav.toc { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 12px 18px; }
+  nav.toc ol { margin: 4px 0; padding-left: 20px; columns: 2; column-gap: 32px; }
+  @media (max-width: 600px) { nav.toc ol { columns: 1; } }
+  code { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 0.9em;
+         background: var(--code-bg); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+  pre { background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px;
+        padding: 12px 14px; overflow-x: auto; line-height: 1.45; }
+  pre code { background: none; padding: 0; font-size: 0.88em; overflow-wrap: normal; }
+  pre .ok { color: var(--ok); } pre .bad { color: var(--bad); } pre .c { color: var(--muted); }
+  kbd { font-family: ui-monospace, Consolas, monospace; font-size: 0.82em; background: var(--card);
+        border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; }
+  table { border-collapse: collapse; width: 100%; margin: 10px 0; display: block; overflow-x: auto; }
+  th, td { text-align: left; vertical-align: top; padding: 7px 10px; border-bottom: 1px solid var(--line); }
+  th { font-weight: 600; }
+  .note, .warn { border-left: 4px solid; border-radius: 6px; padding: 10px 14px; margin: 14px 0; }
+  .note { background: var(--tip-bg); border-color: var(--tip-line); }
+  .warn { background: var(--warn-bg); border-color: var(--warn-line); }
+  .note p, .warn p { margin: 4px 0; }
+  ul.check { list-style: none; padding-left: 0; }
+  ul.check li { padding-left: 28px; position: relative; margin-bottom: 8px; }
+  ul.check li::before { content: "\2610"; position: absolute; left: 4px; color: var(--muted); }
+  footer { margin-top: 56px; color: var(--muted); font-size: 0.88rem; border-top: 1px solid var(--line); padding-top: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>LightSuite Neuroglancer: troubleshooting</h1>
+  <p class="lede">How to check that a dataset opens correctly, and what to do when region names, statistics,
+  the viewer or the installation do not work. See also the <a href="installation.html">installation guide</a>
+  and the <a href="user-guide.html">user guide</a>.</p>
+</header>
+
+<nav class="toc" aria-label="Contents">
+  <strong>Contents</strong>
+  <ol>
+    <li><a href="#checklist">Checklist for a proper run</a></li>
+    <li><a href="#console">Read the terminal output</a></li>
+    <li><a href="#names">Region names</a></li>
+    <li><a href="#overflow">Labels corrupted in the annotation</a></li>
+    <li><a href="#stats">Region statistics</a></li>
+    <li><a href="#errors">Errors that stop the tool</a></li>
+    <li><a href="#zoom">Zoom stack errors</a></li>
+    <li><a href="#viewer">Viewer and browser</a></li>
+    <li><a href="#perf">Speed, memory and disk</a></li>
+    <li><a href="#install">Installation and versions</a></li>
+    <li><a href="#report">Reporting a problem</a></li>
+  </ol>
+</nav>
+
+<h2 id="checklist">1. Checklist for a proper run</h2>
+<p>Go through this once per new dataset (or new PC). Most problems come from one of these points.</p>
+<ul class="check">
+  <li><strong>The results folder is complete.</strong> It contains <code>volume_registered\sample_space\sample_space_manifest.json</code>
+    and the TIFFs listed in it, plus <code>stats\</code> and the <code>config_*.yaml</code>. Copy the whole folder, not only some files.</li>
+  <li><strong>The atlas is reachable.</strong> The sample's <code>config_*.yaml</code> has <code>atlas.atlas_dir</code> pointing to an atlas
+    folder <em>on this PC</em>, or you pass <code>--atlas-dir</code>. A folder holding several atlases works, e.g.
+    <code>--atlas-dir D:\LIGHTSUITE\atlas</code>. See <a href="#names">section 3</a>.</li>
+  <li><strong>The terminal output looks right</strong> (<a href="#console">section 2</a>): the expected atlas in
+    <code>region names from:</code>, no <code>WARNING</code>, statistics found.</li>
+  <li><strong>The registration looks right</strong> in the viewer: the outlines follow the anatomy
+    (<a href="user-guide.html#qc">user guide, section 3</a>).</li>
+  <li><strong>Enough resources:</strong> 3&ndash;4 GB free disk and about 8 GB RAM for a 20&nbsp;&micro;m brain, results on a local disk
+    for the first conversion.</li>
+</ul>
+
+<h2 id="console">2. Read the terminal output</h2>
+<p>The first conversion prints a short report. This is the quickest way to see if something is wrong. Example for a Perens brain:</p>
+<pre><code>Converting D:\...\8_DNF_atlased -&gt; D:\...\8_DNF_atlased\neuroglancer
+  grid (331, 671, 671) (x,y,z), voxel [20.0, 20.0, 20.0] um, channels ['ch1', 'ch2']
+  region names from: <span class="ok">atlas region table (D:\LIGHTSUITE\atlas\perens_20um\ARA2_annotation_info.csv)</span>
+  <span class="bad">WARNING: the annotation volume is uint16 (max 65535), but the atlas has 128 region IDs above that ...</span>
+  region statistics: atlas_median_intensity_ch1_right, ...
+  level 'regions': 615 regions
+  ...
+Viewer (with region search and channel LUTs): http://127.0.0.1:50893/lightsuite/</code></pre>
+<table>
+  <tr><th>Line</th><th>Check</th></tr>
+  <tr><td><code>grid &hellip; voxel &hellip;</code></td><td>The voxel size is the registration resolution (e.g. 20&nbsp;&micro;m). All channels you expect are listed.</td></tr>
+  <tr><td><code>warning: channel N file not found</code></td><td>A channel TIFF is missing. It is skipped. Copy it back into the results folder.</td></tr>
+  <tr><td><code>region names from:</code></td><td>Should name your atlas file. <code>sample stats/region_stats.csv</code> or <code>label numbers only</code> means the atlas was not found (<a href="#names">section 3</a>).</td></tr>
+  <tr><td><code>WARNING: the annotation volume is &hellip;</code></td><td>The annotation itself is damaged (<a href="#overflow">section 4</a>).</td></tr>
+  <tr><td><code>region statistics: none found</code></td><td>No LightSuite statistics tables (<a href="#stats">section 5</a>).</td></tr>
+  <tr><td><code>Using cached conversion</code></td><td>Nothing changed since the last run. Use <code>--reexport</code> to convert again anyway.</td></tr>
+</table>
+<div class="note"><p>On later runs the report is not printed again, because the cached conversion is reused. To see it again, run once with <code>--reexport</code>.</p></div>
+
+<h2 id="names">3. Region names</h2>
+<h3>Names are numbers, or many regions are &ldquo;label N (not in atlas)&rdquo;</h3>
+<p>The tool takes region names from the first source it finds, in this order:</p>
+<table>
+  <tr><th>#</th><th>Atlas</th><th>File it looks for</th></tr>
+  <tr><td>1</td><td>Spinal cord (Fiederling)</td><td><code>Atlas_Regions.csv</code></td></tr>
+  <tr><td>2</td><td>Allen CCF</td><td><code>parcellation_to_parcellation_term_membership.csv</code></td></tr>
+  <tr><td>3</td><td>Perens / Gubra LSFM</td><td><code>ARA2_annotation_info.csv</code></td></tr>
+  <tr><td>4</td><td>BrainGlobe atlases</td><td><code>structures.json</code> in <code>~/.brainglobe</code> or <code>%BRAINGLOBE_DIR%</code></td></tr>
+  <tr><td>5</td><td>The sample's own statistics</td><td><code>stats\region_stats.csv</code>: names only for the regions LightSuite measured</td></tr>
+  <tr><td>6</td><td>none</td><td>bare label numbers</td></tr>
+</table>
+<p>Files 1&ndash;3 are searched in: <code>--atlas-dir</code>, the config's <code>atlas.atlas_dir</code> (both with their subfolders), and <code>~/atlases/*</code>.</p>
+<p><strong>Fix:</strong></p>
+<ol>
+  <li>Check the <code>region names from:</code> line (<a href="#console">section 2</a>).</li>
+  <li>Make the atlas folder reachable, in one of two ways:
+    <ul>
+      <li>Edit the sample's <code>config_*.yaml</code>. Configs written on the analysis server often hold a Linux path or a placeholder
+        such as <code>/path/to/allen_ccf_10um</code>:
+<pre><code>atlas:
+  provider: perens
+  atlas_dir: D:\LIGHTSUITE\atlas\perens_20um     <span class="c"># or D:\LIGHTSUITE\atlas</span></code></pre>
+        The next run detects the change and converts again.</li>
+      <li>Or, without editing anything, run once with the folder (the conversion is redone because the option changed):
+<pre><code>lightsuite-neuroglancer D:\IMAGE_REG_DATA\brain8_analysed\8_DNF_atlased --atlas-dir D:\LIGHTSUITE\atlas</code></pre>
+        Pass <code>--atlas-dir</code> on every later run too, otherwise the tool converts again without it.</li>
+    </ul></li>
+  <li>If you <em>add</em> atlas files to a folder that was already searched, nothing triggers a new conversion. Run once with <code>--reexport</code>.</li>
+</ol>
+<div class="note"><p>With the atlas found, a few labels can still be &ldquo;not in atlas&rdquo;. If the terminal shows the
+<code>WARNING: the annotation volume is uint16</code> line, see the next section. Otherwise these are values in the annotation that
+the atlas does not list (often a different atlas version than the one used for registration).</p></div>
+
+<h3>The wrong atlas is used</h3>
+<p>The first matching file wins, and folders whose name contains the config's <code>atlas.provider</code> (e.g. <code>perens</code>) are tried first.
+An Allen file is used only when the provider is <code>allen</code> or unknown. Give the exact atlas folder with <code>--atlas-dir</code> to be sure.</p>
+
+<h3>The hierarchy levels look odd</h3>
+<p>With the Perens, spinal cord and BrainGlobe atlases, levels are counted from the root of the atlas tree
+(<code>depth 3</code>, <code>depth 2</code>, &hellip;), so each layer cuts the tissue at one depth. Large regions can appear at the same level
+as their parents. This is expected. The <code>regions</code> layer always has the finest labels.</p>
+
+<h2 id="overflow">4. Labels corrupted in the annotation</h2>
+<pre><code><span class="bad">WARNING: the annotation volume is uint16 (max 65535), but the atlas has 128 region IDs above that
+(e.g. 182305689). Those regions were corrupted when the annotation was saved, which is probably why
+23 labels are 'not in atlas' (1216, 2656, 12096, 12160, 12288, 14144, ...).</span></code></pre>
+<p><strong>What it means.</strong> Allen-based atlases (Allen CCF, Perens) have region IDs up to about 600&nbsp;million, e.g. VISrl6b = 312782624.
+The registration pipeline saved the annotation warped onto the sample (<code>annotation_in_sample_20um.tif</code>) in a type that cannot hold them,
+after passing it through 32-bit floating point. The result:</p>
+<ul>
+  <li>about 128 regions (e.g. VISa, VISli, VISrl, VISpor, ProS, the LGd subregions, SSp-un, the interpeduncular nuclei) are merged into a
+      few meaningless labels. One label can hold up to 8 regions;</li>
+  <li>a corrupted ID can also land on a real, smaller ID, and then a region is silently labelled as another one;</li>
+  <li>LightSuite's own statistics do not include these regions.</li>
+</ul>
+<p><strong>The viewer cannot repair this</strong>, because several regions share one corrupted value. The fix is in the registration
+pipeline: write the warped annotation as <code>uint32</code>, and warp it with nearest-neighbour interpolation and an integer output type,
+so that IDs are never converted to floating point. Then re-run the registration export and the statistics.</p>
+<div class="warn"><p>Until it is fixed, do not use the affected regions (and the statistics of their parent regions) from this brain.
+The rest of the annotation is not affected.</p></div>
+
+<h2 id="stats">5. Region statistics</h2>
+<table>
+  <tr><th>Problem</th><th>Cause and fix</th></tr>
+  <tr><td><code>region statistics: none found</code></td><td>The results folder has no <code>registration_analysis\region_metrics.csv</code> and no <code>stats\region_stats*.csv</code>. Run the LightSuite statistics step, then the next run converts again by itself.</td></tr>
+  <tr><td>A region shows no value</td><td>LightSuite did not measure it (empty, or not in the table). Missing values are left empty, not set to 0.</td></tr>
+  <tr><td>Only <code>atlas_&hellip;</code> statistics</td><td>Only atlas-space statistics exist (<code>stats\region_stats.csv</code>). Sample-space ones come from <code>region_stats_sample.csv</code>.</td></tr>
+  <tr><td>Statistics only on the finest level</td><td>The <code>stats\</code> tables are per label. Statistics on every level need <code>registration_analysis\region_metrics.csv</code>.</td></tr>
+  <tr><td>Spinal cord per-segment values missing</td><td>Not supported yet.</td></tr>
+  <tr><td>Values look wrong</td><td>Check the registration first (<a href="user-guide.html#qc">user guide</a>) and the annotation (<a href="#overflow">section 4</a>). The viewer shows the values exactly as in the CSV files.</td></tr>
+</table>
+
+<h2 id="errors">6. Errors that stop the tool</h2>
+<table>
+  <tr><th>Message</th><th>Cause and fix</th></tr>
+  <tr><td><code>No LightSuite results found in &hellip;</code></td><td>No <code>volume_registered\sample_space\sample_space_manifest.json</code> in the folder or the 4 levels below it. Choose the registration output folder.</td></tr>
+  <tr><td><code>Not a folder: &hellip;</code></td><td>The path does not exist. Put paths with spaces in quotes.</td></tr>
+  <tr><td><code>No folder selected.</code> / <code>Invalid choice.</code></td><td>The folder picker was closed, or a wrong number was typed when several results were found.</td></tr>
+  <tr><td><code>Annotation volume (annotation_path in the manifest) not found.</code></td><td>The manifest points to a path on another machine (e.g. <code>/media/gbm/...</code>) and the file is not in the results folder either. Copy the annotation TIFF into <code>volume_registered\sample_space\</code> or the results folder.</td></tr>
+  <tr><td><code>Shape mismatch: &hellip; vs annotation &hellip;</code></td><td>A volume in the manifest has a different size from the annotation, usually files from two different registration runs. Re-export the registration, or remove the stray file.</td></tr>
+  <tr><td><code>Traceback &hellip; MemoryError</code></td><td>Not enough RAM. Close other programs, or use <code>--no-meshes</code> (<a href="#perf">section 9</a>).</td></tr>
+  <tr><td><code>PermissionError</code> / <code>Access is denied</code></td><td>Usually a file open in another program (e.g. Fiji) or a sync tool such as OneDrive. Close it, or write elsewhere with <code>--out</code>.</td></tr>
+  <tr><td><code>OSError: [Errno 98/10048] address already in use</code></td><td>The port given with <code>--port</code> is taken, e.g. by another viewer. Leave out <code>--port</code> or choose another.</td></tr>
+</table>
+
+<h2 id="zoom">7. Zoom stack errors (<code>--zoom</code>)</h2>
+<table>
+  <tr><th>Message</th><th>Cause and fix</th></tr>
+  <tr><td><code>expected one folder with multires_regopts.json, found 0</code> (or 2+)</td><td>Pass the multires results folder itself (the one with <code>multires_regopts.json</code>), not its parent.</td></tr>
+  <tr><td><code>pair manifest &hellip; not found</code> / <code>ROI TIFF for channel &hellip; not found</code></td><td>Files of the multires run were moved and are not in the expected subfolders (<code>converted\</code>). Copy the whole multires folder, and keep the raw ROI TIFFs at their recorded path or next to the folder.</td></tr>
+  <tr><td><code>elastix TransformParameters files not found</code> / <code>initial transform &hellip; not found</code></td><td>The <code>elastix_roi_to_overview</code> folder is missing or incomplete.</td></tr>
+  <tr><td><code>elastix 'BSplineTransform' is not affine &hellip;</code></td><td>The ROI-to-overview registration has a B-spline stage. It cannot be shown as one transform. Use a rigid/affine ROI registration.</td></tr>
+  <tr><td><code>HowToCombineTransforms &hellip; is not supported</code></td><td>Only composed elastix transforms are supported.</td></tr>
+  <tr><td><code>--zoom needs &hellip;regopts.json</code></td><td>The atlas results folder must contain <code>regopts.json</code>.</td></tr>
+  <tr><td><code>The zoom's overview stack &hellip; is not the stack the atlas registration used</code></td><td>The multires run used a different overview stack (size or voxel size) than the atlas registration. Use the multires results of the same brain and the same overview.</td></tr>
+  <tr><td><code>channel &hellip; ROI geometry differs from the reference channel</code></td><td>The ROI channels have different sizes or positions. Each must be a separate multires run.</td></tr>
+  <tr><td><code>expected a 3D stack</code></td><td>The ROI TIFF is not a single 3D stack (e.g. one file per plane or a multi-channel file).</td></tr>
+  <tr><td>The ROI sits on the wrong anatomy</td><td>The tool only applies the saved transforms. Check the multires landmarks and elastix result.</td></tr>
+</table>
+
+<h2 id="viewer">8. Viewer and browser</h2>
+<table>
+  <tr><th>Problem</th><th>Fix</th></tr>
+  <tr><td>Black or empty viewer</td><td>The browser has no WebGL 2. Use a recent Chrome or Edge and turn on <em>hardware acceleration</em> in its settings. Over Remote Desktop, WebGL may be unavailable.</td></tr>
+  <tr><td>Square patches in the slice views where one layer is missing (black, grey or darker colours)</td><td>Some data chunks failed to load. Older versions of the tool had this on Windows (the data server refused some connections): update the tool. With an up-to-date version, reload the browser page (<kbd>F5</kbd>). The converted data itself is not damaged.</td></tr>
+  <tr><td>Data stops loading, panel shows errors</td><td>The terminal was closed or stopped. Run the command again. It starts in seconds.</td></tr>
+  <tr><td>Browser did not open</td><td>Open the <code>Viewer &hellip; /lightsuite/</code> URL printed in the terminal yourself.</td></tr>
+  <tr><td>Search finds the region but does not jump to it</td><td>The terminal says <code>region centres missing</code>: the cached data is from an older version. Run once with <code>--reexport</code>.</td></tr>
+  <tr><td>No 3D surfaces</td><td>The conversion was made with <code>--no-meshes</code>, or the <code>region meshes</code> layer is hidden (its name is crossed out in the layer bar: click it).</td></tr>
+  <tr><td>A layer seems to be missing</td><td>It is hidden: hidden layers have a crossed-out name. Click the name to show it.</td></tr>
+  <tr><td>Another PC cannot open the URL</td><td>By design, the viewer only accepts connections from this PC (<code>127.0.0.1</code>). Install the tool on the other PC.</td></tr>
+  <tr><td>Orientation is not the usual atlas one</td><td>The data is shown on the registration grid, like LightSuite's QC images. This is expected.</td></tr>
+</table>
+
+<h2 id="perf">9. Speed, memory and disk</h2>
+<ul>
+  <li><strong>First run is slow:</strong> building the 3D meshes takes most of the time. Use <code>--no-meshes</code> for a quick look.
+      Copy the results to a local SSD; network drives are much slower.</li>
+  <li><strong>Converts again every time:</strong> something in the results folder changes between runs (e.g. a sync tool touching files),
+      or you alternate between runs with and without <code>--no-meshes</code> or <code>--atlas-dir</code>. Each different set of options causes a new conversion.
+      Updating the tool also causes one new conversion.</li>
+  <li><strong>Memory:</strong> about 8 GB for a 20&nbsp;&micro;m brain. Zoom stacks are read fully into memory: a large ROI needs RAM at least the size of its TIFF.</li>
+  <li><strong>Disk:</strong> 3&ndash;4 GB per brain in <code>&lt;results&gt;\neuroglancer\</code>, and about 1.15&times; the TIFF size per zoom stack.
+      These folders can be deleted at any time.</li>
+  <li><strong>Read-only results folder:</strong> the converted data goes to <code>%LOCALAPPDATA%\lightsuite-neuroglancer\</code>
+      (Linux/macOS: <code>~/.cache/lightsuite-neuroglancer/</code>). Clean it from time to time.</li>
+</ul>
+
+<h2 id="install">10. Installation and versions</h2>
+<p>The tool is tested with fixed versions of its Python packages. Ranges are set in <code>pyproject.toml</code>, and the exact tested versions are in
+<code>view_in_neuroglancer.py.lock</code>. Neuroglancer in particular is pinned to one version (2.41), because newer versions can change things the viewer relies on.</p>
+<table>
+  <tr><th>Problem</th><th>Fix</th></tr>
+  <tr><td><code>uv</code> or <code>lightsuite-neuroglancer</code> not recognized</td><td>Reopen the terminal after installing. Run <code>uv tool update-shell</code> once. See the <a href="installation.html#trouble">installation guide</a>.</td></tr>
+  <tr><td>Download fails on the first run</td><td>No internet or a proxy. Set <code>HTTPS_PROXY</code> before running.</td></tr>
+  <tr><td>Errors appeared after an update, or the environment seems broken</td><td>Reinstall cleanly:
+<pre><code>uv cache clean
+uv tool install --reinstall git+https://github.com/YCabara/lightsuite_neuroglancer.git</code></pre>
+    When running from the folder (<code>uv run view_in_neuroglancer.py</code>), uv uses the exact versions of the lock file. <code>uv cache clean</code> is enough.</td></tr>
+  <tr><td><code>pip</code> reports a conflict (e.g. <code>neuroglancer</code>, <code>numpy</code>)</td><td>Another package in the same environment needs other versions. Install the tool in its own environment (<code>uv tool install</code>, or a separate conda env).</td></tr>
+  <tr><td>Which version am I running?</td><td><code>lightsuite-neuroglancer --version</code></td></tr>
+</table>
+
+<h2 id="report">11. Reporting a problem</h2>
+<p>If none of the above helps, send to the maintainer:</p>
+<ol>
+  <li>the version (<code>lightsuite-neuroglancer --version</code>) and the operating system;</li>
+  <li>the exact command you ran;</li>
+  <li>the <strong>full</strong> terminal output of a run with <code>--reexport</code> (copy the text; a screenshot cuts long lines);</li>
+  <li>for viewer problems: a screenshot and the browser name and version;</li>
+  <li>the <code>sample_space_manifest.json</code> and <code>config_*.yaml</code> of the dataset (small text files). Do not send the TIFFs unless asked.</li>
+</ol>
+
+<footer>lightsuite-neuroglancer 0.2.0 &middot; <a href="installation.html">Installation guide</a> &middot; <a href="user-guide.html">User guide</a> &middot; <a href="ARCHITECTURE.md">Architecture</a></footer>
+</div>
+</body>
+</html>

@@ -1,8 +1,18 @@
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["neuroglancer", "tifffile", "imagecodecs", "numpy", "pandas",
-#                 "scipy", "scikit-image", "pyyaml"]
+# dependencies = [
+#     "neuroglancer==2.41.*",
+#     "tifffile>=2023.7.10",
+#     "imagecodecs>=2023.1.23",
+#     "numpy>=1.24,<3",
+#     "pandas>=2.0,<4",
+#     "scipy>=1.10,<2",
+#     "scikit-image>=0.21,<1",
+#     "pyyaml>=6,<7",
+# ]
 # ///
+# Keep in sync with [project].dependencies in pyproject.toml. Exact tested versions
+# are in view_in_neuroglancer.py.lock (uv lock --script view_in_neuroglancer.py).
 """View LightSuite registration results in Neuroglancer.
 
 Usage:
@@ -30,10 +40,13 @@ results are converted once to Neuroglancer "precomputed" data (cached in
 Region names / hierarchy come from, in order of preference:
   1. Fiederling spinal cord atlas Atlas_Regions.csv (parent tree)
   2. Allen parcellation_to_parcellation_term_membership.csv
-  3. a downloaded BrainGlobe atlas' structures.json (~/.brainglobe,
+  3. a Gubra / Perens LSFM ARA2_annotation_info.csv region table
+  4. a downloaded BrainGlobe atlas' structures.json (~/.brainglobe,
      /home/*/.brainglobe or $BRAINGLOBE_DIR), e.g. Perens LSFM, Princeton
-  4. the sample's stats/*region_stats.csv (region / structure / division)
-  5. bare label numbers
+  5. the sample's stats/*region_stats.csv (region / structure / division)
+  6. bare label numbers
+Atlas files are looked for in --atlas-dir, the config's atlas.atlas_dir (and
+the subfolders of both) and ~/atlases/*.
 """
 
 import argparse
@@ -70,6 +83,7 @@ SYNTHETIC_ID_BASE = 3_000_000_000
 CHANNEL_COLORS = ["#ffffff", "#00ff00", "#ff00ff", "#00ffff", "#ffff00"]
 ALLEN_MEMBERSHIP = "parcellation_to_parcellation_term_membership.csv"
 CORD_REGIONS = "Atlas_Regions.csv"
+REGION_TABLE = "ARA2_annotation_info.csv"  # Gubra / Perens LSFM atlas region table
 
 
 # --------------------------------------------------------------------------
@@ -189,11 +203,18 @@ class Sample:
 
     def atlas_dirs(self, override: str | None) -> list[Path]:
         dirs = []
-        if override:
-            dirs.append(Path(override).expanduser())
         cfg_dir = (self.config.get("atlas") or {}).get("atlas_dir")
-        if cfg_dir:
-            dirs.append(Path(cfg_dir).expanduser())
+        for d in (override, cfg_dir):
+            if not d:
+                continue
+            # the folder itself, then its subfolders: a folder holding several
+            # atlases (e.g. D:\atlas\{allen_CCF3_10um, perens_20um}) also works
+            d = Path(d).expanduser()
+            dirs.append(d)
+            try:
+                dirs += sorted(s for s in d.iterdir() if s.is_dir())
+            except OSError:
+                pass
         if self.manifest.get("segments_csv"):
             dirs.append(Path(self.manifest["segments_csv"]).parent)
         atlases = Path.home() / "atlases"
@@ -203,6 +224,7 @@ class Sample:
 
     def source_files(self) -> list[Path]:
         files = [self.root / MANIFEST]
+        files += sorted(self.root.glob("*.y*ml"))  # config: atlas_dir, brainglobe_name
         files += [self.resolve(v) for k, v in self.manifest.items() if k.endswith("_path")]
         files += [self.resolve(v) for v in self.manifest.get("channel_paths", {}).values()]
         files += [self.root / "registration_analysis" / "region_metrics.csv",
@@ -376,14 +398,19 @@ def allen_ontology(csv: Path, labels) -> Ontology | None:
     return Ontology(f"Allen membership ({csv})", levels, chains, terms)
 
 
-def fiederling_records(csv: Path) -> list[dict]:
+def table_records(csv: Path) -> list[dict]:
+    """Region table with id, parent id, name, acronym, red, green, blue columns:
+    the Fiederling spinal cord Atlas_Regions.csv (parent_ID) or the Gubra / Perens
+    ARA2_annotation_info.csv (parent_id). Black means no colour."""
+    df = pd.read_csv(csv, encoding="utf-8-sig")
+    parent_col = next(c for c in df.columns if c.lower() == "parent_id")
     recs = []
-    for _, r in pd.read_csv(csv).iterrows():
+    for _, r in df.iterrows():
         rgb = (int(r["red"]), int(r["green"]), int(r["blue"]))
         recs.append({"id": int(r["id"]), "acronym": str(r["acronym"]),
                      "name": str(r["name"]).strip(),
                      "color": "#%02x%02x%02x" % rgb if any(rgb) else None,
-                     "parent": int(r["parent_ID"]) if pd.notna(r["parent_ID"]) else 0})
+                     "parent": int(r[parent_col]) if pd.notna(r[parent_col]) else 0})
     return recs
 
 
@@ -488,15 +515,24 @@ def build_ontology(sample: Sample, labels, atlas_dir_override) -> Ontology:
     if "segments_csv" in sample.manifest or sample.atlas_name == "fiederling":
         for d in dirs:
             if (d / CORD_REGIONS).is_file():
-                onto = tree_ontology(fiederling_records(d / CORD_REGIONS), labels,
+                onto = tree_ontology(table_records(d / CORD_REGIONS), labels,
                                      f"atlas region tree ({d / CORD_REGIONS})")
                 onto.dir = d
                 break
+    prefer = list(dict.fromkeys(
+        [d for d in dirs if sample.atlas_name.lower() in d.name.lower()] + dirs))
     if onto is None:
-        prefer = [d for d in dirs if sample.atlas_name.lower() in d.name.lower()] + dirs
-        for d in dict.fromkeys(prefer):
+        for d in prefer:
             if (d / ALLEN_MEMBERSHIP).is_file() and sample.atlas_name in ("allen", "unknown"):
                 onto = allen_ontology(d / ALLEN_MEMBERSHIP, labels)
+                if onto:
+                    onto.dir = d
+                    break
+    if onto is None:
+        for d in prefer:
+            if (d / REGION_TABLE).is_file():
+                onto = tree_ontology(table_records(d / REGION_TABLE), labels,
+                                     f"atlas region table ({d / REGION_TABLE})", min_coverage=0.9)
                 if onto:
                     onto.dir = d
                     break
@@ -754,6 +790,28 @@ def extra_names(sample: Sample, onto: Ontology, key: str, values) -> dict[int, s
 # Export
 # --------------------------------------------------------------------------
 
+def warn_label_overflow(onto: Ontology, annot: np.ndarray):
+    """Atlas IDs that do not fit the annotation's integer type were corrupted before
+    this tool saw them (e.g. Allen IDs like 312782574 passed through float32 and were
+    then stored as uint16). The labels then match no region, and several regions share
+    one label. This cannot be undone here, so say it clearly."""
+    if not np.issubdtype(annot.dtype, np.integer):
+        return
+    top = np.iinfo(annot.dtype).max
+    too_big = sorted(t["native_id"] for t in onto.terms.values()
+                     if (t.get("native_id") or 0) > top and t["name"] and
+                     not t["name"].endswith("(not in atlas)"))
+    unknown = sorted(t["native_id"] for t in onto.terms.values()
+                     if t["name"].endswith("(not in atlas)"))
+    if too_big and unknown:
+        print(f"  WARNING: the annotation volume is {annot.dtype} (max {top}), but the atlas has "
+              f"{len(too_big)} region IDs above that (e.g. {too_big[0]}). Those regions were "
+              f"corrupted when the annotation was saved, which is probably why {len(unknown)} labels "
+              f"are 'not in atlas' ({', '.join(map(str, unknown[:6]))}"
+              f"{', ...' if len(unknown) > 6 else ''}). Fix the annotation in the registration "
+              "pipeline (keep it uint32, warp it with nearest-neighbour interpolation).")
+
+
 def source_signature(sample: Sample, atlas_dir) -> str:
     h = hashlib.sha1(f"v{TOOL_VERSION}|{atlas_dir}".encode())
     h.update(Path(__file__).read_bytes())  # re-convert when this tool changes
@@ -785,6 +843,7 @@ def export(sample: Sample, out: Path, atlas_dir_override, meshes: bool) -> dict:
     label_count = dict(zip(labels.tolist(), counts.tolist()))
     onto = build_ontology(sample, labels, atlas_dir_override)
     print(f"  region names from: {onto.source}")
+    warn_label_overflow(onto, annot)
     metric_names = attach_metrics(onto, sample, label_count)
     if metric_names:
         print(f"  region statistics: {', '.join(metric_names)}")
@@ -1100,11 +1159,11 @@ class Zoom:
     def out_dir(self, out_arg: str | None) -> Path:
         if out_arg:
             return Path(out_arg).expanduser() / f"zoom_{self.tag}"
-        out = self.root / "neuroglancer"
-        if os.access(self.root, os.W_OK):
-            return out
+        # same rules as output_dir(): real write test, then the per-OS cache folder
+        if _writable(self.root):
+            return self.root / "neuroglancer"
         h = hashlib.sha1(str(self.root).encode()).hexdigest()[:8]
-        return Path.home() / ".cache" / "lightsuite-neuroglancer" / f"zoom_{self.tag}-{h}"
+        return cache_root() / f"zoom_{self.tag}-{h}"
 
     def signature(self) -> str:
         h = hashlib.sha1(f"zoom{ZOOM_VERSION}|{CHUNK}".encode())
@@ -1809,6 +1868,11 @@ class CORSHandler(http.server.SimpleHTTPRequestHandler):
 
 class QuietHTTPServer(http.server.ThreadingHTTPServer):
     daemon_threads = True
+    # Neuroglancer asks for many chunks at once, each on a new connection. With the
+    # default listen backlog (5), Windows refuses the extra connections (WinError
+    # 10061) instead of letting the client retry like Linux does: those chunks never
+    # load and show as empty 64-voxel squares in the slice views.
+    request_queue_size = 128
 
     def handle_error(self, request, client_address):
         # Neuroglancer cancels chunk requests it no longer needs (pan / zoom); the

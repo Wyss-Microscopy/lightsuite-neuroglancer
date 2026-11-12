@@ -240,7 +240,8 @@ Channels 2+ are blended <em>additively</em>, so with e.g. ch1 = Magenta and ch2 
 <p>Region names and the hierarchy are taken from the first source found, in this order:</p>
 <ol>
   <li>Spinal-cord (Fiederling) atlas: <code>Atlas_Regions.csv</code> next to the manifest's <code>segments_csv</code>.</li>
-  <li>Allen CCF: <code>parcellation_to_parcellation_term_membership.csv</code> in the config's <code>atlas.atlas_dir</code>, in <code>--atlas-dir</code>, or in <code>~/atlases/*</code>.</li>
+  <li>Allen CCF: <code>parcellation_to_parcellation_term_membership.csv</code> in the config's <code>atlas.atlas_dir</code>, in <code>--atlas-dir</code> (or their subfolders), or in <code>~/atlases/*</code>.</li>
+  <li>Perens / Gubra LSFM: <code>ARA2_annotation_info.csv</code>, in the same folders.</li>
   <li>A downloaded <strong>BrainGlobe</strong> atlas (<code>structures.json</code>) in <code>%BRAINGLOBE_DIR%</code>, <code>~/.brainglobe</code> or other users' <code>.brainglobe</code> folders (<code>C:\Users\*</code>, <code>/home/*</code>), matched by the config's <code>brainglobe_name</code>.</li>
   <li>The sample's own <code>stats/region_stats.csv</code> (region / structure / division).</li>
   <li>Bare label numbers.</li>
@@ -248,7 +249,8 @@ Channels 2+ are blended <em>additively</em>, so with e.g. ch1 = Magenta and ch2 
 <div class="note">
 <p><strong>Better names for BrainGlobe-registered brains</strong> (e.g. Perens LSFM). Download the atlas once on the PC to get full names, colours and the complete hierarchy:</p>
 <pre><code>uvx --from brainglobe-atlasapi brainglobe install -a perens_lsfm_mouse_20um</code></pre>
-<p>Use the name in the sample's <code>config_*.yaml</code> under <code>atlas.brainglobe_name</code>. The next run detects the change and converts again.</p>
+<p>Use the name in the sample's <code>config_*.yaml</code> under <code>atlas.brainglobe_name</code>. The next run detects the config change and converts again.
+If you install an atlas without changing the config, run once with <code>--reexport</code>.</p>
 </div>
 
 <h2 id="zoom">8. Zoom stacks</h2>
@@ -274,10 +276,13 @@ README for details.</p>
 </ul>
 
 <h2 id="trouble">10. Troubleshooting</h2>
+<p>Common installation problems are below. For region names, statistics, error messages and viewer problems, see the
+<a href="troubleshooting.html">troubleshooting guide</a>.</p>
 <table>
   <tr><th>Problem</th><th>Fix</th></tr>
   <tr><td><code>uv</code> not recognized</td><td>Reopen the terminal after installing uv. On Windows, check that <code>%USERPROFILE%\.local\bin</code> is in PATH.</td></tr>
-  <tr><td><code>lightsuite-neuroglancer</code> not recognized</td><td>Run <code>uv tool update-shell</code> and reopen the terminal, or use option A.</td></tr>
+  <tr><td>&ldquo;does not appear to be a Python project&rdquo;</td><td>The folder has no <code>pyproject.toml</code>: it is an old or partial copy. Download the whole repository again (git clone or ZIP), or install straight from GitHub with <code>uv tool install git+https://github.com/YCabara/lightsuite_neuroglancer.git</code>.</td></tr>
+  <tr><td><code>lightsuite-neuroglancer</code> not recognized</td><td>Check that <code>uv tool install</code> finished without an error. Then run <code>uv tool update-shell</code> and reopen the terminal, or use option A.</td></tr>
   <tr><td>&ldquo;No LightSuite results found&rdquo;</td><td>The folder (or the 4 levels below it) has no <code>volume_registered\sample_space\sample_space_manifest.json</code>.</td></tr>
   <tr><td>&ldquo;Annotation volume &hellip; not found&rdquo;</td><td>The TIFFs listed in the manifest are not in the results folder. Copy them back next to the manifest.</td></tr>
   <tr><td>Region names are only numbers or short</td><td>No atlas ontology was found. Install the BrainGlobe atlas (section 7) or pass <code>--atlas-dir</code>.</td></tr>

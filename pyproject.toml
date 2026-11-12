@@ -9,15 +9,17 @@ description = "Open LightSuite atlas-registration results in Neuroglancer"
 readme = "README.md"
 requires-python = ">=3.10"
 # Keep in sync with the "# /// script" header of view_in_neuroglancer.py
+# neuroglancer is pinned to one minor version: the viewer uses parts of its Python
+# API that are not stable (see docs/ARCHITECTURE.md, section 12).
 dependencies = [
-    "neuroglancer",
-    "tifffile",
-    "imagecodecs",
-    "numpy",
-    "pandas",
-    "scipy",
-    "scikit-image",
-    "pyyaml",
+    "neuroglancer==2.41.*",
+    "tifffile>=2023.7.10",
+    "imagecodecs>=2023.1.23",
+    "numpy>=1.24,<3",
+    "pandas>=2.0,<4",
+    "scipy>=1.10,<2",
+    "scikit-image>=0.21,<1",
+    "pyyaml>=6,<7",
 ]
 classifiers = [
     "Programming Language :: Python :: 3",

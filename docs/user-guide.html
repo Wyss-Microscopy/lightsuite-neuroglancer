@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LightSuite Neuroglancer User Guide</title>
+<style>
+  :root {
+    --bg: #fbfbfa; --fg: #1d1f21; --muted: #5d6166; --line: #e2e3e0;
+    --card: #ffffff; --code-bg: #f1f2ef; --accent: #2f6f8f; --warn-bg: #fff6e0; --warn-line: #e3b54a;
+    --tip-bg: #eaf4f8; --tip-line: #7fb2c9;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #17191b; --fg: #e4e5e3; --muted: #9da1a6; --line: #2e3134;
+      --card: #1e2124; --code-bg: #25292c; --accent: #7cc0e0; --warn-bg: #2d2717; --warn-line: #a27f2c;
+      --tip-bg: #18262d; --tip-line: #3d6d82;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #17191b; --fg: #e4e5e3; --muted: #9da1a6; --line: #2e3134;
+    --card: #1e2124; --code-bg: #25292c; --accent: #7cc0e0; --warn-bg: #2d2717; --warn-line: #a27f2c;
+    --tip-bg: #18262d; --tip-line: #3d6d82;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 32px 16px 80px; }
+  header { border-bottom: 1px solid var(--line); margin-bottom: 24px; padding-bottom: 16px; }
+  h1 { font-size: 1.9rem; margin: 0 0 4px; letter-spacing: -0.01em; }
+  .lede { color: var(--muted); margin: 0; }
+  h2 { font-size: 1.35rem; margin: 44px 0 12px; padding-top: 8px; border-top: 1px solid var(--line); }
+  h3 { font-size: 1.05rem; margin: 26px 0 8px; }
+  a { color: var(--accent); }
+  nav.toc { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 12px 18px; }
+  nav.toc ol { margin: 4px 0; padding-left: 20px; columns: 2; column-gap: 32px; }
+  @media (max-width: 600px) { nav.toc ol { columns: 1; } }
+  code { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 0.9em;
+         background: var(--code-bg); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+  pre { background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px;
+        padding: 12px 14px; overflow-x: auto; line-height: 1.45; }
+  pre code { background: none; padding: 0; font-size: 0.88em; overflow-wrap: normal; }
+  kbd { font-family: ui-monospace, Consolas, monospace; font-size: 0.82em; background: var(--card);
+        border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; }
+  table { border-collapse: collapse; width: 100%; margin: 10px 0; display: block; overflow-x: auto; }
+  th, td { text-align: left; vertical-align: top; padding: 7px 10px; border-bottom: 1px solid var(--line); }
+  th { font-weight: 600; }
+  td:first-child { white-space: nowrap; }
+  .note, .warn { border-left: 4px solid; border-radius: 6px; padding: 10px 14px; margin: 14px 0; }
+  .note { background: var(--tip-bg); border-color: var(--tip-line); }
+  .warn { background: var(--warn-bg); border-color: var(--warn-line); }
+  .note p, .warn p { margin: 4px 0; }
+  figure.shot { margin: 16px 0; }
+  figure.shot img { display: block; width: 100%; height: auto; border: 1px solid var(--line); border-radius: 8px; }
+  figure.shot figcaption { color: var(--muted); font-size: 0.88rem; margin-top: 6px; }
+  ol.steps > li { margin-bottom: 10px; }
+  footer { margin-top: 56px; color: var(--muted); font-size: 0.88rem; border-top: 1px solid var(--line); padding-top: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>LightSuite Neuroglancer: user guide</h1>
+  <p class="lede">How to look at a registered brain (or spinal cord), check the registration, find
+  regions and read their statistics. For installation, see the
+  <a href="installation.html">installation guide</a>.</p>
+</header>
+
+<nav class="toc" aria-label="Contents">
+  <strong>Contents</strong>
+  <ol>
+    <li><a href="#start">Quick start</a></li>
+    <li><a href="#screen">The screen</a></li>
+    <li><a href="#qc">Check the registration</a></li>
+    <li><a href="#find">Find and inspect a region</a></li>
+    <li><a href="#stats">Read region statistics</a></li>
+    <li><a href="#compare">Compare and sort regions</a></li>
+    <li><a href="#channels">Channels, contrast and LUTs</a></li>
+    <li><a href="#3d">Work in 3D</a></li>
+    <li><a href="#zoom">High-resolution zoom stacks</a></li>
+    <li><a href="#interpret">Reading the data correctly</a></li>
+    <li><a href="#practice">Good practice</a></li>
+    <li><a href="#keys">Quick reference</a></li>
+  </ol>
+</nav>
+
+<h2 id="start">1. Quick start</h2>
+<ol class="steps">
+  <li><strong>Open a results folder.</strong> This is the LightSuite registration output, the folder that contains
+    <code>volume_registered\sample_space\</code>. A parent folder also works: if it contains several results, you choose one.
+<pre><code>lightsuite-neuroglancer D:\brain8_analysed\8_DNF_atlased</code></pre>
+    On Windows you can also double-click <code>run_viewer.bat</code> and pick the folder, or drop the folder onto it.</li>
+  <li><strong>Wait for the first conversion</strong> (a few minutes per brain, only the first time). The terminal shows
+    which atlas the region names come from. Check this line:
+<pre><code>  region names from: Allen membership (...)</code></pre></li>
+  <li><strong>The browser opens.</strong> Leave the terminal window open while you work. It serves the data.
+    To finish, press <kbd>Ctrl</kbd>+<kbd>C</kbd> in the terminal.</li>
+</ol>
+<div class="note"><p>The next time you open the same brain it starts in seconds. The converted data is
+kept in <code>&lt;results&gt;\neuroglancer\</code>.</p></div>
+
+<h2 id="screen">2. The screen</h2>
+<figure class="shot">
+  <a href="images/viewer.png"><img src="images/viewer.png" width="1907" height="929"
+    alt="The viewer: side panel on the left, layer bar on top, four views in the middle, layer settings and Selection panel on the right"></a>
+  <figcaption>The viewer for a 20&nbsp;&micro;m brain, with the <code>structure</code> level shown over <code>ch1</code>. Click to enlarge.</figcaption>
+</figure>
+<table>
+  <tr><th>Part</th><th>Where</th><th>What it does</th></tr>
+  <tr><td>Side panel</td><td>left</td><td>Find a region. Channel visibility, LUT and invert. Hide it with <strong>&lsaquo;</strong>.</td></tr>
+  <tr><td>Layer bar</td><td>top</td><td>One numbered entry per layer. A <s>crossed-out</s> name means the layer is hidden.
+    Click a name to show or hide the layer (or press its number key). <kbd>Ctrl</kbd>+click opens its settings on the right.
+    Hover a name to see all the actions.</td></tr>
+  <tr><td>Views</td><td>middle</td><td>Three slice views and one 3D view. The scale bar is bottom left.</td></tr>
+  <tr><td>Layer settings</td><td>top right</td><td>Tabs of the selected layer: <em>Source</em>, <em>Render</em>/<em>Rendering</em> (colours, contrast), <em>Seg.</em> (region list, tags and statistics).</td></tr>
+  <tr><td>Selection panel</td><td>bottom right</td><td>Mouse position, and the names and statistics of the region under the mouse or of the pinned region.</td></tr>
+</table>
+<p>Start with another layout using <code>--layout xy</code> (or <code>yz</code>, <code>xz</code>, <code>3d</code>).</p>
+
+<h3>Layers you will see</h3>
+<table>
+  <tr><th>Layer</th><th>What it is</th><th>At start</th></tr>
+  <tr><td><code>ch1</code>, <code>ch2</code>, &hellip;</td><td>Your sample channels.</td><td>ch1 shown</td></tr>
+  <tr><td><code>template</code></td><td>The atlas reference image, warped onto your sample.</td><td>hidden</td></tr>
+  <tr><td><code>boundaries</code></td><td>White outlines of the atlas regions.</td><td>shown</td></tr>
+  <tr><td>hierarchy levels</td><td>One layer per level of the atlas, from fine to coarse (e.g. Allen <code>substructure</code>, <code>structure</code>, <code>division</code>, <code>category</code>; BrainGlobe and spinal cord atlases: <code>regions</code>, <code>depth 3</code>, &hellip;).</td><td>finest shown</td></tr>
+  <tr><td>extra labels</td><td>E.g. spinal cord <code>segments</code>.</td><td>hidden</td></tr>
+  <tr><td><code>region meshes</code></td><td>3D surfaces of the regions.</td><td>whole brain/cord</td></tr>
+</table>
+
+<h2 id="qc">3. Check the registration</h2>
+<p>Do this first for each new brain, before you trust any region statistic.</p>
+<ol class="steps">
+  <li>Keep <code>ch1</code> and <code>boundaries</code> shown. Scroll through the slices in each view.
+    The outlines should follow visible anatomy: the brain surface, ventricles, the corpus callosum,
+    the hippocampus, the cerebellum.</li>
+  <li>Show the <code>template</code> layer and switch it on and off. Its anatomy should line up with your sample's.</li>
+  <li>Look at both hemispheres and at the edges (olfactory bulb, cerebellum, brainstem). Errors are often largest there.</li>
+  <li>If the outlines are clearly shifted or flipped, the problem is in the registration, not in the viewer.
+    The viewer shows the data exactly the way LightSuite's own QC overlays do.</li>
+</ol>
+
+<h2 id="find">4. Find and inspect a region</h2>
+<h3>With the side panel (easiest)</h3>
+<ol class="steps">
+  <li>Type in <strong>Find a region</strong>: a name (<code>locus coeruleus</code>), an acronym (<code>CA1</code>)
+    or an atlas ID (<code>147</code>). Small typos, accents and British spellings are fine.
+    Matches marked <em>similar</em> are guesses, so check the name.</li>
+  <li>Press <kbd>Enter</kbd> or click a result. The view jumps to the region and zooms to fit it. Only that region
+    is coloured, its 3D surface is shown, and its statistics are pinned in the Selection panel.</li>
+  <li><kbd>Shift</kbd>+click another result to add it, e.g. to look at two neighbouring nuclei together.</li>
+  <li><strong>Show all regions</strong> brings back the view you had before searching.</li>
+</ol>
+<h3>With the mouse</h3>
+<ul>
+  <li><strong>Hover</strong> over the tissue. The Selection panel shows the region name at every level of the hierarchy.</li>
+  <li><strong>Double-click</strong> a region to keep only that region shown and pin it. The panel then lists it
+    <em>and every region that contains it</em> (e.g. CP &rarr; STR &rarr; CNU). Double-click it again to show all regions.
+    Double-click the background to unpin.</li>
+  <li><kbd>Ctrl</kbd>+right-click pins a region without hiding the others.</li>
+</ul>
+<div class="note"><p>Which level you click on matters. With the finest level shown you select a small region
+(e.g. a cortical layer). Show a coarser level layer (e.g. <code>division</code>) and hide the finer one to select larger
+regions.</p></div>
+
+<h2 id="stats">5. Read region statistics</h2>
+<p>The statistics are the ones LightSuite computed. The viewer does not compute any. Hover over a statistic's name
+in the Selection panel to see which file it comes from.</p>
+<table>
+  <tr><th>Name pattern</th><th>Meaning</th><th>Example</th></tr>
+  <tr><td>no prefix, no side</td><td>From <code>registration_analysis/region_metrics.csv</code>. Available at every hierarchy level.</td><td><code>volume_mm3</code>, <code>mean_intensity</code>, <code>positive_percent</code></td></tr>
+  <tr><td><code>&hellip;_left</code> / <code>&hellip;_right</code></td><td>Measured in <strong>sample space</strong>, per hemisphere (<code>stats/region_stats_sample.csv</code>). Finest level only.</td><td><code>median_intensity_left</code></td></tr>
+  <tr><td><code>atlas_&hellip;</code></td><td>Measured in <strong>atlas space</strong> (<code>stats/region_stats.csv</code>). E.g. <code>atlas_volume_mm3_left</code> is the volume of the atlas region, not of your sample.</td><td><code>atlas_volume_mm3_left</code></td></tr>
+  <tr><td><code>&hellip;_ch1</code>, <code>&hellip;_ch2</code></td><td>The value for that channel (only when there are several channels).</td><td><code>mean_intensity_ch2</code></td></tr>
+</table>
+<ul>
+  <li>A statistic that is <strong>missing</strong> for a region has no value. It is not zero.</li>
+  <li>Values that are the same for every region of a channel (thresholds, background) are not shown.</li>
+  <li>Spinal cord per-segment tables are not shown yet.</li>
+</ul>
+
+<h2 id="compare">6. Compare and sort regions</h2>
+<ol class="steps">
+  <li>Open a hierarchy level layer (<kbd>Ctrl</kbd>+click it in the layer bar) and go to its <strong>Seg.</strong> tab.</li>
+  <li>Search the list by acronym, name, ID or <strong>tag</strong>. Tags are the larger regions a region belongs to,
+    written with <code>#</code>, e.g. <code>#Isocortex</code> lists all isocortex regions at that level.</li>
+  <li>Under <em>numerical properties</em>, add statistics as columns. Then sort by them, or filter
+    (e.g. only regions above a value).</li>
+  <li>Click regions in the list to show them. In the <code>region meshes</code> layer this shows their 3D surfaces.</li>
+</ol>
+
+<h2 id="channels">7. Channels, contrast and LUTs</h2>
+<ul>
+  <li><strong>Show or hide</strong> a channel with its checkbox in the side panel.</li>
+  <li><strong>Contrast</strong> is set in Neuroglancer: <kbd>Ctrl</kbd>+click the channel in the layer bar, open the <em>Rendering</em> tab, and drag the
+    range or the histogram. The starting range is chosen automatically from the data.</li>
+  <li><strong>LUT</strong> (side panel): changing it keeps your contrast range.
+    <ul>
+      <li>To overlay channels, give each one a different colour (e.g. ch1 Magenta, ch2 Green). They are added together,
+          so overlap appears white.</li>
+      <li>To see intensity differences in one channel, use Fire, Inferno, Magma or Viridis.</li>
+      <li>To set the contrast without clipping, use <strong>HiLo</strong>: pixels at or below the minimum turn blue,
+          at or above the maximum turn red. Change the range until only a few pixels are red, then switch back.</li>
+    </ul></li>
+  <li><strong>invert</strong> flips the LUT (e.g. dark signal on a light background).</li>
+</ul>
+<div class="warn"><p>Contrast and LUT only change the display. They never change the statistics, which were
+computed by LightSuite from the original data.</p></div>
+
+<h2 id="3d">8. Work in 3D</h2>
+<ul>
+  <li>The 3D view shows the <code>region meshes</code> layer: at start, the whole brain or cord.</li>
+  <li>Searching or double-clicking a region adds its surface. Use <em>Show all regions</em> to go back.</li>
+  <li>For a larger 3D view, start with <code>--layout 3d</code>, or change the layout in Neuroglancer.</li>
+  <li>If you started with <code>--no-meshes</code>, there are no surfaces. Run again without it (the conversion
+      is redone, including meshes).</li>
+</ul>
+
+<h2 id="zoom">9. High-resolution zoom stacks</h2>
+<p>If you imaged a region of interest at higher resolution with the LightSuite <strong>multires</strong> workflow, you can show it
+inside the whole brain:</p>
+<pre><code>lightsuite-neuroglancer D:\data\brain_atlased --zoom D:\data\brain_multires_results</code></pre>
+<ul>
+  <li>Each ROI channel becomes a layer (e.g. <code>greencells 488</code>), at its native resolution, under the atlas outlines.</li>
+  <li>The view starts on the ROI. In the default layout the 3D view is replaced by a second xy view zoomed on the ROI.</li>
+  <li>The ROI is placed with the transforms LightSuite already computed. Nothing is registered again. If it does not sit
+      on the right anatomy, check the multires registration.</li>
+  <li>The atlas labels are still at the registration resolution (e.g. 20&nbsp;&micro;m), so region edges look blocky at high zoom.
+      This is normal.</li>
+  <li><code>--zoom</code> can be given several times for several ROIs. The first conversion needs about 1.15&times; the raw TIFF size on disk.</li>
+</ul>
+
+<h2 id="interpret">10. Reading the data correctly</h2>
+<table>
+  <tr><th>You see</th><th>Meaning</th></tr>
+  <tr><td>Orientation is not the usual atlas one</td><td>The data is shown on the registration grid, the same way as LightSuite's QC overlays. This is intended.</td></tr>
+  <tr><td><code>label N (not in atlas)</code></td><td>A label value in the annotation that the atlas ontology does not list.</td></tr>
+  <tr><td>Region names are only numbers or short</td><td>No atlas ontology was found. Install the atlas or use <code>--atlas-dir</code>, then run with <code>--reexport</code> (see <a href="troubleshooting.html#names">troubleshooting</a>).</td></tr>
+  <tr><td>A region has no statistic</td><td>LightSuite did not measure it (or it is empty). It is not zero.</td></tr>
+  <tr><td>Blocky edges when zoomed in</td><td>The atlas is on the registration grid (e.g. 20&nbsp;&micro;m voxels).</td></tr>
+  <tr><td>A level layer looks the same as the next one</td><td>For many regions the region and its parent are the same at that depth of the atlas tree.</td></tr>
+</table>
+
+<h2 id="practice">11. Good practice</h2>
+<ul>
+  <li><strong>Check the registration (section 3) before you use the statistics.</strong></li>
+  <li>Copy results to a <strong>local disk</strong> for the first conversion: it is much faster than a network drive.</li>
+  <li><strong>Keep the terminal open.</strong> If you close it, the viewer stops loading data. Run the command again to continue.</li>
+  <li><strong>The view is not saved</strong> between runs. Write down the region and settings, or take a screenshot, for figures and notes.</li>
+  <li>Run with <code>--reexport</code> after you install an atlas or change the sample's config file. Changes to the
+      registration files themselves are detected automatically.</li>
+  <li>Each converted brain uses 3&ndash;4 GB. You can delete <code>&lt;results&gt;\neuroglancer\</code> at any time. It is rebuilt on the next run.</li>
+  <li>The viewer works only on the computer that runs it (<code>127.0.0.1</code>). To show a brain to someone on another PC, they install the tool and open a copy of the results.</li>
+  <li>You can open several brains at the same time from several terminals. Each one gets its own port.</li>
+</ul>
+
+<h2 id="keys">12. Quick reference</h2>
+<table>
+  <tr><th>Action</th><th>How</th></tr>
+  <tr><td>Show / hide a layer</td><td>Click its name in the layer bar, or press its number key</td></tr>
+  <tr><td>Open a layer's settings</td><td><kbd>Ctrl</kbd>+click its name in the layer bar</td></tr>
+  <tr><td>Change slice</td><td>Mouse wheel in a slice view</td></tr>
+  <tr><td>Zoom</td><td><kbd>Ctrl</kbd>+wheel</td></tr>
+  <tr><td>Pan / rotate (3D)</td><td>Drag</td></tr>
+  <tr><td>Region name and statistics</td><td>Hover; Selection panel (bottom right)</td></tr>
+  <tr><td>Isolate and pin a region</td><td>Double-click (again: show all; on background: unpin)</td></tr>
+  <tr><td>Pin without isolating</td><td><kbd>Ctrl</kbd>+right-click</td></tr>
+  <tr><td>Find a region</td><td>Side panel, type, <kbd>Enter</kbd>; <kbd>&uarr;</kbd><kbd>&darr;</kbd> to choose</td></tr>
+  <tr><td>Add a region to the highlight</td><td><kbd>Shift</kbd>+click or <kbd>Shift</kbd>+<kbd>Enter</kbd></td></tr>
+  <tr><td>Clear the search box</td><td><kbd>Esc</kbd></td></tr>
+  <tr><td>All Neuroglancer shortcuts</td><td><kbd>H</kbd></td></tr>
+  <tr><td>Stop the viewer</td><td><kbd>Ctrl</kbd>+<kbd>C</kbd> in the terminal</td></tr>
+</table>
+<p>Command-line options and fixes for common problems are in the
+<a href="installation.html#options">installation guide</a>.</p>
+
+<footer>lightsuite-neuroglancer 0.2.0 &middot; <a href="installation.html">Installation guide</a> &middot; <a href="troubleshooting.html">Troubleshooting</a> &middot; <a href="ARCHITECTURE.md">Architecture (for developers)</a> &middot; <a href="https://github.com/google/neuroglancer">Neuroglancer</a></footer>
+</div>
+</body>
+</html>

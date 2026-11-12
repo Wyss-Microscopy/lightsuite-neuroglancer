@@ -26,8 +26,14 @@ lightsuite-neuroglancer D:\brain8_analysed\8_DNF_atlased
 ```
 
 `pip install .` into any Python ≥3.10 environment also works. On Windows you can
-double-click `run_viewer.bat` (or drop a results folder on it). Full
-installation and usage guide: [docs/installation.html](docs/installation.html).
+double-click `run_viewer.bat` (or drop a results folder on it).
+
+Documentation:
+
+* [docs/installation.html](docs/installation.html): installation, options, troubleshooting
+* [docs/user-guide.html](docs/user-guide.html): how to check a registration, find regions, read statistics
+* [docs/troubleshooting.html](docs/troubleshooting.html): checklist for a proper run, region names, error messages
+* [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): code structure, dependencies, maintenance (for developers)
 
 The folder can be the registration output itself (the one containing
 `volume_registered/sample_space/sample_space_manifest.json`) or any folder
@@ -103,13 +109,14 @@ Tried in this order:
 
 1. **Spinal cord (Fiederling) atlas**: `Atlas_Regions.csv` next to the
    manifest's `segments_csv`.
-2. **Allen CCF**: `parcellation_to_parcellation_term_membership.csv` in the
-   config's `atlas.atlas_dir` or `~/atlases/*`.
-3. **BrainGlobe atlas**: `structures.json` of a downloaded atlas in
+2. **Allen CCF**: `parcellation_to_parcellation_term_membership.csv` in
+   `--atlas-dir`, the config's `atlas.atlas_dir` (or their subfolders) or `~/atlases/*`.
+3. **Perens / Gubra LSFM**: `ARA2_annotation_info.csv` in the same folders.
+4. **BrainGlobe atlas**: `structures.json` of a downloaded atlas in
    `~/.brainglobe`, `/home/*/.brainglobe` or `$BRAINGLOBE_DIR`,
    matched by the config's `brainglobe_name` (e.g. Perens LSFM, Princeton).
-4. **The sample's own** `stats/region_stats.csv` (region / structure / division).
-5. Bare label numbers.
+5. **The sample's own** `stats/region_stats.csv` (region / structure / division).
+6. Bare label numbers.
 
 ## Region statistics
 
