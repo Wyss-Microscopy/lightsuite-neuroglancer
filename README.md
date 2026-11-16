@@ -21,12 +21,16 @@ uv run view_in_neuroglancer.py /path/to/results       # or give the folder
 Or install it as a command (works on Windows, Linux and macOS):
 
 ```bash
-uv tool install git+https://github.com/YCabara/lightsuite_neuroglancer.git
+uv tool install --python 3.12 git+https://github.com/YCabara/lightsuite_neuroglancer.git
 lightsuite-neuroglancer D:\brain8_analysed\8_DNF_atlased
 ```
 
-`pip install .` into any Python ≥3.10 environment also works. On Windows you can
-double-click `run_viewer.bat` (or drop a results folder on it).
+`pip install .` into a Python 3.10–3.13 environment also works. Newer Pythons lack
+prebuilt packages for some dependencies and would need a C++ compiler.
+
+**Windows, no setup:** download the repository (ZIP), extract it and double-click
+`run_viewer.bat`, or drop a results folder on it. If uv is missing, it installs it,
+then it uses Python 3.12 and the tested package versions automatically.
 
 Documentation:
 

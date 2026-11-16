@@ -1,5 +1,5 @@
 # /// script
-# requires-python = ">=3.10"
+# requires-python = ">=3.10,<3.14"
 # dependencies = [
 #     "neuroglancer==2.41.*",
 #     "tifffile>=2023.7.10",
@@ -13,6 +13,9 @@
 # ///
 # Keep in sync with [project].dependencies in pyproject.toml. Exact tested versions
 # are in view_in_neuroglancer.py.lock (uv lock --script view_in_neuroglancer.py).
+# The Python cap is deliberate: on a newer Python some packages (imagecodecs,
+# scikit-image) have no prebuilt wheels yet, so pip/uv try to compile them, which
+# fails on Windows without Visual C++. Raise it once they publish wheels.
 """View LightSuite registration results in Neuroglancer.
 
 Usage:

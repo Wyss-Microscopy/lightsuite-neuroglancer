@@ -90,8 +90,9 @@
 <h2 id="requirements">1. Requirements</h2>
 <ul>
   <li><strong>Windows 10/11, Linux or macOS.</strong> No administrator rights needed.</li>
-  <li><strong>uv</strong>, a small Python manager. It downloads Python 3.10+ and all
-      dependencies by itself, so you do not need Python, conda or pip.</li>
+  <li><strong>uv</strong>, a small Python manager. It downloads Python (3.10&ndash;3.13) and all
+      dependencies by itself, so you do not need Python, conda, pip or a C++ compiler.
+      On Windows, <code>run_viewer.bat</code> installs uv for you if it is missing.</li>
   <li><strong>Internet</strong> on the first run only, to download the dependencies (about 150 MB).</li>
   <li>A browser with <strong>WebGL 2</strong>: a recent Chrome, Edge or Firefox.</li>
   <li><strong>3&ndash;4 GB free disk per brain</strong> for the converted data, and
@@ -122,14 +123,18 @@ see option C below.</p></div>
 cd D:\LIGHTSUITE\lightsuite-neuroglancer
 uv run view_in_neuroglancer.py</code></pre>
 <p>On Windows you can also just <strong>double-click <code>run_viewer.bat</code></strong> (a folder
-picker opens), or <strong>drag a results folder onto it</strong>.</p>
+picker opens), or <strong>drag a results folder onto it</strong>. This is the simplest option for
+non-programmers: you can skip step 2, because the launcher installs uv when it is missing. It always uses
+Python 3.12 and the exact tested package versions, whatever Python is already on the PC.
+The first run downloads about 150&nbsp;MB.</p>
 
 <h3>B. Install as a command (recommended for regular users)</h3>
 <pre><code># from GitHub
-uv tool install git+https://github.com/YCabara/lightsuite_neuroglancer.git
+uv tool install --python 3.12 git+https://github.com/YCabara/lightsuite_neuroglancer.git
 
-# or from a local copy of the folder
-uv tool install D:\LIGHTSUITE\lightsuite-neuroglancer</code></pre>
+# or from a local copy of the whole folder (it must contain pyproject.toml)
+uv tool install --python 3.12 D:\LIGHTSUITE\lightsuite-neuroglancer</code></pre>
+<p><code>--python 3.12</code> makes uv use a Python version that every dependency has ready-built packages for.</p>
 <p>Then, from any terminal:</p>
 <pre><code>lightsuite-neuroglancer D:\brain8_analysed\8_DNF_atlased</code></pre>
 <p>If the command is not found, run <code>uv tool update-shell</code> once and reopen the terminal.</p>
@@ -282,6 +287,7 @@ README for details.</p>
   <tr><th>Problem</th><th>Fix</th></tr>
   <tr><td><code>uv</code> not recognized</td><td>Reopen the terminal after installing uv. On Windows, check that <code>%USERPROFILE%\.local\bin</code> is in PATH.</td></tr>
   <tr><td>&ldquo;does not appear to be a Python project&rdquo;</td><td>The folder has no <code>pyproject.toml</code>: it is an old or partial copy. Download the whole repository again (git clone or ZIP), or install straight from GitHub with <code>uv tool install git+https://github.com/YCabara/lightsuite_neuroglancer.git</code>.</td></tr>
+  <tr><td>&ldquo;Microsoft Visual C++ 14.0 or greater is required&rdquo;</td><td>uv picked a Python version that is too new (e.g. 3.15), so it tried to compile packages. Add <code>--python 3.12</code> to the <code>uv tool install</code> or <code>uv run</code> command, or use <code>run_viewer.bat</code>, which already does this. You do not need to install Visual C++.</td></tr>
   <tr><td><code>lightsuite-neuroglancer</code> not recognized</td><td>Check that <code>uv tool install</code> finished without an error. Then run <code>uv tool update-shell</code> and reopen the terminal, or use option A.</td></tr>
   <tr><td>&ldquo;No LightSuite results found&rdquo;</td><td>The folder (or the 4 levels below it) has no <code>volume_registered\sample_space\sample_space_manifest.json</code>.</td></tr>
   <tr><td>&ldquo;Annotation volume &hellip; not found&rdquo;</td><td>The TIFFs listed in the manifest are not in the results folder. Copy them back next to the manifest.</td></tr>

@@ -55,7 +55,7 @@ Design choices worth keeping:
 |---|---|
 | `view_in_neuroglancer.py` | The whole application (about 2,000 lines). Entry point `main()`. |
 | `pyproject.toml` | Packaging metadata, dependencies, console scripts. |
-| `run_viewer.bat` | Windows launcher: checks that `uv` exists, then `uv run`s the script with the dropped folder or arguments. |
+| `run_viewer.bat` | Windows launcher: finds `uv` (PATH, then `%USERPROFILE%\.local\bin`) or installs it with the official installer, then runs `uv run --python 3.12` on the script with the dropped folder or arguments. |
 | `README.md` | Short overview, options, data sources. |
 | `docs/installation.html` | End-user installation guide. |
 | `view_in_neuroglancer.py.lock` | Exact, tested dependency versions for `uv run view_in_neuroglancer.py` (uv script lock file). Commit it. |
@@ -105,10 +105,23 @@ Versions are fixed at two levels:
 | **Ranges** | both dependency lists: `neuroglancer==2.41.*` (one minor version, see §12), `numpy>=1.24,<3`, `pandas>=2.0,<4`, `scipy>=1.10,<2`, `scikit-image>=0.21,<1`, `pyyaml>=6,<7`; `tifffile` and `imagecodecs` (calendar versions) have lower bounds only | `uv tool install`, `pip install` |
 | **Exact lock** | `view_in_neuroglancer.py.lock`, made by `uv lock --script view_in_neuroglancer.py` | `uv run view_in_neuroglancer.py` and `run_viewer.bat` |
 
-The lock resolves for every Python ≥ 3.10 at once, so it holds the newest versions
+The lock resolves for every Python from 3.10 to 3.13 at once, so it holds the newest versions
 that still support 3.10 (in November 2026: numpy 2.4, scipy 1.17, pandas 3.1,
 scikit-image 0.26, neuroglancer 2.41.2). It was tested with a full conversion and
-viewer run on Python 3.11 (Windows). The lower bounds of the ranges were not tested.
+viewer run on Python 3.11 (Windows), and the launcher's Python 3.12 install was tested
+from an empty uv cache. The lower bounds of the ranges were not tested.
+
+**Python cap (`requires-python = ">=3.10,<3.14"`, in both the script header and
+pyproject).** uv picks the newest Python it can get. When a new Python is released
+(3.15 in October 2026), some compiled dependencies don't publish wheels for it until
+weeks or months later: the locked imagecodecs and scikit-image have Windows wheels
+only up to 3.13. Without wheels, uv/pip build from source, and on Windows that fails
+with "Microsoft Visual C++ 14.0 or greater is required". The cap prevents this, and
+`run_viewer.bat` also passes `--python 3.12`. To raise the cap, check that every
+compiled package in the lock has wheels for the new version, change both headers,
+re-run `uv lock --script`, and test. Do not use `--no-build`: `atomicwrites` (a neuroglancer
+dependency) exists only as a source package. It is pure Python and builds without a
+compiler.
 
 | Package | Used for | Where |
 |---|---|---|

@@ -257,6 +257,8 @@ The rest of the annotation is not affected.</p></div>
 <table>
   <tr><th>Problem</th><th>Fix</th></tr>
   <tr><td><code>uv</code> or <code>lightsuite-neuroglancer</code> not recognized</td><td>Reopen the terminal after installing. Run <code>uv tool update-shell</code> once. See the <a href="installation.html#trouble">installation guide</a>.</td></tr>
+  <tr><td>&ldquo;Microsoft Visual C++ 14.0 or greater is required&rdquo; (while building <code>pyyaml</code>, <code>imagecodecs</code>, &hellip;)</td><td>The Python version is too new for some packages (no ready-built versions yet), so uv/pip tried to compile them. Use Python 3.12: <code>run_viewer.bat</code> does this automatically. Otherwise add <code>--python 3.12</code> to <code>uv run</code> or <code>uv tool install</code>, or create the conda env with <code>python=3.12</code>. Don't install Visual C++ for this.</td></tr>
+  <tr><td>&ldquo;does not appear to be a Python project&rdquo;</td><td>The folder has no <code>pyproject.toml</code>: it is an old or partial copy. Download the whole repository again.</td></tr>
   <tr><td>Download fails on the first run</td><td>No internet or a proxy. Set <code>HTTPS_PROXY</code> before running.</td></tr>
   <tr><td>Errors appeared after an update, or the environment seems broken</td><td>Reinstall cleanly:
 <pre><code>uv cache clean

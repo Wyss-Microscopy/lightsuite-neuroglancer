@@ -7,7 +7,9 @@ name = "lightsuite-neuroglancer"
 version = "0.2.0"
 description = "Open LightSuite atlas-registration results in Neuroglancer"
 readme = "README.md"
-requires-python = ">=3.10"
+# Upper bound: newer Pythons lack prebuilt wheels for some dependencies (see the
+# script header). Raise it together with the script header.
+requires-python = ">=3.10,<3.14"
 # Keep in sync with the "# /// script" header of view_in_neuroglancer.py
 # neuroglancer is pinned to one minor version: the viewer uses parts of its Python
 # API that are not stable (see docs/ARCHITECTURE.md, section 12).
