@@ -4,7 +4,7 @@ Open LightSuite atlas-registration results in [Neuroglancer](https://github.com/
 your sample channels with the warped atlas on top, with region names, colours,
 the atlas hierarchy, per-region statistics and 3D region meshes.
 
-
+<img width="1907" height="929" alt="viewer" src="https://github.com/user-attachments/assets/ae6e924b-16af-483a-bc5f-7a34e2c2bbd7" />
 
 ## Usage
 
