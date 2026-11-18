@@ -4,6 +4,8 @@ Open LightSuite atlas-registration results in [Neuroglancer](https://github.com/
 your sample channels with the warped atlas on top, with region names, colours,
 the atlas hierarchy, per-region statistics and 3D region meshes.
 
+
+
 ## Usage
 
 Needs [uv](https://docs.astral.sh/uv/) (Linux, Windows or macOS). Python and the
